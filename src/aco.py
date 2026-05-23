@@ -1,6 +1,7 @@
 import numpy as np
 from .utils import distance_matrix
 import math
+import time
 
 
 def two_opt_swap(tour, i, k):
@@ -8,10 +9,11 @@ def two_opt_swap(tour, i, k):
     return new
 
 
-def two_opt(tour, coords):
+def two_opt(tour, coords, return_eval_count=False):
     improved = True
     best = tour
     best_len = tour_length(best, coords)
+    eval_count = 1
     n = len(tour)
     while improved:
         improved = False
@@ -19,11 +21,14 @@ def two_opt(tour, coords):
             for k in range(i + 1, n - 1):
                 new = two_opt_swap(best, i, k)
                 new_len = tour_length(new, coords)
+                eval_count += 1
                 if new_len < best_len:
                     best = new
                     best_len = new_len
                     improved = True
         # loop until no improvement
+    if return_eval_count:
+        return best, best_len, eval_count
     return best, best_len
 
 
@@ -75,6 +80,7 @@ class AntColony:
     def _construct_solutions(self):
         tours = []
         lengths = []
+        eval_count = 0
         for _ in range(self.n_ants):
             start = int(self.rng.integers(0, self.n))
             tour = [start]
@@ -88,7 +94,8 @@ class AntColony:
                 current = nxt
             tours.append(tour)
             lengths.append(tour_length(tour, self.coords))
-        return tours, lengths
+            eval_count += 1
+        return tours, lengths, eval_count
 
     def _update_pheromones(self, tours, lengths, best_so_far=None, best_len=None):
         # evaporation
@@ -110,20 +117,27 @@ class AntColony:
                 self.pheromone[a, b] += delta
                 self.pheromone[b, a] += delta
 
-    def run(self, callback=None):
+    def run(self, callback=None, return_stats=False):
         best_tour = None
         best_len = float('inf')
         history = []
         convergence_iteration = None
         initial_worst = float('inf')
+        best_found_iter = None
+        t0 = time.perf_counter()
+        objective_evals_total = 0
+        objective_evals_to_convergence = None
+        convergence_time_s = None
         for it in range(self.n_iterations):
-            tours, lengths = self._construct_solutions()
+            tours, lengths, eval_count = self._construct_solutions()
+            objective_evals_total += eval_count
             # optional local search
             if self.apply_two_opt:
                 new_tours = []
                 new_lengths = []
                 for tour, L in zip(tours, lengths):
-                    t, l = two_opt(tour, self.coords)
+                    t, l, two_opt_evals = two_opt(tour, self.coords, return_eval_count=True)
+                    objective_evals_total += two_opt_evals
                     new_tours.append(t)
                     new_lengths.append(l)
                 tours, lengths = new_tours, new_lengths
@@ -136,6 +150,9 @@ class AntColony:
                 if L < best_len:
                     best_len = L
                     best_tour = tour
+                    best_found_iter = it
+                    objective_evals_to_convergence = objective_evals_total
+                    convergence_time_s = time.perf_counter() - t0
             # mark convergence at first improvement
             if best_len < prev_best and convergence_iteration is None:
                 convergence_iteration = it
@@ -146,12 +163,21 @@ class AntColony:
                 callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
         if convergence_iteration is None:
             convergence_iteration = self.n_iterations - 1
-        # find the first iteration where the best_len was achieved
-        best_found_iter = None
-        for idx, val in enumerate(history):
-            if abs(val - best_len) < 1e-12:
-                best_found_iter = idx
-                break
         if best_found_iter is None:
             best_found_iter = self.n_iterations - 1
+            objective_evals_to_convergence = objective_evals_total
+            convergence_time_s = time.perf_counter() - t0
+
+        total_time_s = time.perf_counter() - t0
+        stats = {
+            "run_time_s": float(total_time_s),
+            "convergence_time_s": float(convergence_time_s),
+            "objective_evals_total": int(objective_evals_total),
+            "objective_evals_to_convergence": int(objective_evals_to_convergence),
+            "convergence_iteration": int(convergence_iteration),
+            "best_found_iteration": int(best_found_iter),
+        }
+
+        if return_stats:
+            return best_tour, best_len, history, convergence_iteration, best_found_iter, stats
         return best_tour, best_len, history, convergence_iteration, best_found_iter

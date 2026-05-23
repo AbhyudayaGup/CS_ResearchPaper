@@ -13,9 +13,9 @@ def run_once(args):
                    alpha=args.alpha, beta=args.beta, rho=args.rho, Q=args.Q,
                    apply_two_opt=args.two_opt, seed=args.seed)
     start = time.time()
-    result = ac.run()
+    result = ac.run(return_stats=True)
     # support older and newer return signatures (3,4,5+ values)
-    best_tour = best_len = history = convergence_iteration = best_found_iter = None
+    best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
     if isinstance(result, tuple):
         if len(result) == 3:
             best_tour, best_len, history = result
@@ -23,6 +23,8 @@ def run_once(args):
             best_tour, best_len, history, convergence_iteration = result
         elif len(result) >= 5:
             best_tour, best_len, history, convergence_iteration, best_found_iter = result[:5]
+        if len(result) >= 6:
+            stats = result[5]
     else:
         best_tour, best_len, history = result
     elapsed = time.time() - start
@@ -40,6 +42,15 @@ def run_once(args):
         "best_found_iteration": int(best_found_iter) if best_found_iter is not None else None,
         "time_s": elapsed,
     }
+    if stats:
+        out.update(
+            {
+                "convergence_time_s": float(stats.get("convergence_time_s", elapsed)),
+                "objective_evals_to_convergence": int(stats.get("objective_evals_to_convergence", 0)),
+                "objective_evals_total": int(stats.get("objective_evals_total", 0)),
+                "run_time_s": float(stats.get("run_time_s", elapsed)),
+            }
+        )
     os.makedirs("results", exist_ok=True)
     fname = os.path.join("results", f"run_seed_{args.seed or 0}.json")
     with open(fname, "w") as f:

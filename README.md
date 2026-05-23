@@ -6,7 +6,12 @@ Current UI behavior:
 - Left sidebar controls only TSP instance generation (cities/seed/layout/time limit for exact solver).
 - ACO settings are independent and configured from the right panel via `Configure ACO`.
 - Every time a new TSP instance is generated, the app automatically computes an exact/optimal route and shows it below the city map.
-- Right panel includes an algorithm dropdown with placeholders for upcoming methods (Bee Colony / PSO).
+- Right panel includes an algorithm dropdown with implemented `ACO` and `PSO` (Bee Colony placeholder).
+- After each model run, the app shows comparison cards:
+	- `Convergence time (s)`
+	- `Evals to convergence`
+	- `Total objective evals`
+- Each run is appended to `results/model_comparison_runs.csv` for cross-model benchmarking.
 
 Quick start:
 
@@ -87,9 +92,10 @@ Notes:
 
 Files:
 - `src/aco.py` — AntColony implementation with optional 2-opt.
+- `src/pso.py` — Particle Swarm Optimization (random-key encoding) with optional 2-opt.
 - `src/exact_solver.py` — exact TSP solver (brute force + CP-SAT up to 50 cities).
 - `src/utils.py` — random instance generator and distance matrix.
-- `web/app.py` — Streamlit UI to run and visualize ACO.
+- `web/app.py` — Streamlit UI to run and visualize ACO/PSO with comparison metrics and CSV logging.
 - `src/runner.py` — simple CLI runner that saves results to `results/`.
 
 If you'd like, I'll implement tests, parameter-sweep harness, GIF export, and polish the UI next.

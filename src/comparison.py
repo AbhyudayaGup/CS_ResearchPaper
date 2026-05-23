@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
 import time
 
 import numpy as np
@@ -157,7 +157,7 @@ def _fallback_stats(model_key: str, history, best_len, best_found_iter, converge
     }
 
 
-def _run_aco(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, alpha: float, beta: float, rho: float, Q: float, target_length: float | None = None):
+def _run_aco(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, alpha: float, beta: float, rho: float, Q: float, target_length: float | None = None, target_gap_pct: float = 0.0, progress_callback: Callable[[Dict[str, Any]], None] | None = None):
     model = AntColony(
         coords,
         n_ants=int(config_value),
@@ -170,7 +170,16 @@ def _run_aco(coords: np.ndarray, config_value: int, *, iterations: int, seed: in
         seed=seed,
     )
     started = time.perf_counter()
-    run_result = model.run(return_stats=True, target_length=target_length)
+    def _callback(**payload: Any) -> None:
+        if progress_callback is not None:
+            progress_callback(payload)
+
+    run_result = model.run(
+        callback=_callback if progress_callback is not None else None,
+        return_stats=True,
+        target_length=target_length,
+        target_gap_pct=target_gap_pct,
+    )
     elapsed_s = time.perf_counter() - started
     best_tour, best_len, history, convergence_iteration, best_found_iter, stats = _extract_run_result(run_result)
     if stats is None:
@@ -178,7 +187,7 @@ def _run_aco(coords: np.ndarray, config_value: int, *, iterations: int, seed: in
     return best_tour, best_len, history, convergence_iteration, best_found_iter, stats
 
 
-def _run_pso(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, w: float, c1: float, c2: float, target_length: float | None = None):
+def _run_pso(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, w: float, c1: float, c2: float, target_length: float | None = None, target_gap_pct: float = 0.0, progress_callback: Callable[[Dict[str, Any]], None] | None = None):
     model = ParticleSwarm(
         coords,
         n_particles=int(config_value),
@@ -190,7 +199,16 @@ def _run_pso(coords: np.ndarray, config_value: int, *, iterations: int, seed: in
         seed=seed,
     )
     started = time.perf_counter()
-    run_result = model.run(return_stats=True, target_length=target_length)
+    def _callback(**payload: Any) -> None:
+        if progress_callback is not None:
+            progress_callback(payload)
+
+    run_result = model.run(
+        callback=_callback if progress_callback is not None else None,
+        return_stats=True,
+        target_length=target_length,
+        target_gap_pct=target_gap_pct,
+    )
     elapsed_s = time.perf_counter() - started
     best_tour, best_len, history, convergence_iteration, best_found_iter, stats = _extract_run_result(run_result)
     if stats is None:
@@ -209,6 +227,8 @@ def run_algorithm_on_instance(
     exact_status: str | None,
     aco_settings: Dict[str, Any],
     pso_settings: Dict[str, Any],
+    target_gap_pct: float = 0.0,
+    progress_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
     spec = spec_by_label(algorithm_label)
     base: Dict[str, Any] = {
@@ -244,6 +264,8 @@ def run_algorithm_on_instance(
         )
         return base
 
+    target_length = exact_length if exact_length is not None and exact_status == "OPTIMAL" else None
+
     if spec.key == "aco":
         _, best_len, _, convergence_iteration, best_found_iter, stats = _run_aco(
             coords,
@@ -255,7 +277,9 @@ def run_algorithm_on_instance(
             beta=aco_settings.get("beta", 5.0),
             rho=aco_settings.get("rho", 0.5),
             Q=aco_settings.get("Q", 100.0),
-            target_length=exact_length,
+            target_length=target_length,
+            target_gap_pct=target_gap_pct,
+            progress_callback=progress_callback,
         )
     elif spec.key == "pso":
         _, best_len, _, convergence_iteration, best_found_iter, stats = _run_pso(
@@ -267,7 +291,9 @@ def run_algorithm_on_instance(
             w=pso_settings.get("w", 0.5),
             c1=pso_settings.get("c1", 1.5),
             c2=pso_settings.get("c2", 1.5),
-            target_length=exact_length,
+            target_length=target_length,
+            target_gap_pct=target_gap_pct,
+            progress_callback=progress_callback,
         )
     else:
         base.update(
@@ -323,41 +349,132 @@ def run_comparison_batch(
     exact_timeout: int,
     aco_settings: Dict[str, Any],
     pso_settings: Dict[str, Any],
+    target_gap_pct: float = 0.0,
+    progress_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
     instances = build_city_instances(city_sizes, base_seed, clustered)
     rows: List[Dict[str, Any]] = []
-
+    tasks: List[Dict[str, Any]] = []
     for instance_index, instance in enumerate(instances):
+        for model_label in selected_models:
+            for config_value in model_config_values.get(model_label, [10, 20, 40]):
+                tasks.append(
+                    {
+                        "instance_index": instance_index,
+                        "instance": instance,
+                        "model_label": model_label,
+                        "config_value": int(config_value),
+                    }
+                )
+
+    total_tasks = len(tasks)
+    completed_tasks = 0
+
+    def emit_progress(event: Dict[str, Any]) -> None:
+        if progress_callback is not None:
+            progress_callback({
+                "batch_total": total_tasks,
+                "batch_completed": completed_tasks,
+                **event,
+            })
+
+    for task_index, task in enumerate(tasks):
+        instance = task["instance"]
         coords = instance["coords"]
         exact = run_exact_baseline(coords, exact_timeout)
         exact_length = exact.get("length")
         exact_status = exact.get("status")
-        for model_label in selected_models:
-            for config_value in model_config_values.get(model_label, [10, 20, 40]):
-                run_seed = None if base_seed is None else int(base_seed) + instance_index * 1000 + int(config_value)
-                row = run_algorithm_on_instance(
-                    model_label,
-                    coords,
-                    int(config_value),
-                    iterations=iterations,
-                    seed=run_seed,
-                    exact_length=exact_length,
-                    exact_status=exact_status,
-                    aco_settings=aco_settings,
-                    pso_settings=pso_settings,
-                )
-                row.update(
-                    {
-                        "city_count": int(instance["city_count"]),
-                        "city_seed": instance["seed"],
-                        "exact_status": exact_status,
-                        "exact_length": None if exact_length is None else float(exact_length),
-                        "exact_runtime_s": float(exact.get("runtime_s", exact.get("solve_time_s", 0.0))),
-                        "exact_is_optimal": bool(exact.get("is_optimal", False)),
-                        "exact_method": exact.get("method"),
-                    }
-                )
-                rows.append(row)
+
+        def run_progress_callback(payload: Dict[str, Any]) -> None:
+            if progress_callback is None:
+                return
+            iterations_total = max(1, int(iterations))
+            iteration = int(payload.get("iteration", 0))
+            current_progress = min(1.0, float(iteration + 1) / float(iterations_total))
+            batch_progress = (completed_tasks + current_progress) / float(total_tasks or 1)
+            emit_progress(
+                {
+                    "type": "iteration",
+                    "task_index": task_index,
+                    "task_total": total_tasks,
+                    "model": task["model_label"],
+                    "city_count": int(instance["city_count"]),
+                    "config_value": int(task["config_value"]),
+                    "config_label": model_config_values.get(task["model_label"], [])[0] if model_config_values.get(task["model_label"]) else None,
+                    "iteration": iteration + 1,
+                    "iterations_total": iterations_total,
+                    "current_progress": current_progress,
+                    "batch_progress": batch_progress,
+                    "best_len": payload.get("best_len"),
+                    "convergence_iteration": payload.get("convergence_iteration"),
+                }
+            )
+
+        run_seed = None if base_seed is None else int(base_seed) + task["instance_index"] * 1000 + int(task["config_value"])
+        emit_progress(
+            {
+                "type": "run_started",
+                "task_index": task_index,
+                "task_total": total_tasks,
+                "model": task["model_label"],
+                "city_count": int(instance["city_count"]),
+                "config_value": int(task["config_value"]),
+                "exact_status": exact_status,
+                "exact_length": None if exact_length is None else float(exact_length),
+                "batch_progress": completed_tasks / float(total_tasks or 1),
+                "current_progress": 0.0,
+            }
+        )
+        row = run_algorithm_on_instance(
+            task["model_label"],
+            coords,
+            int(task["config_value"]),
+            iterations=iterations,
+            seed=run_seed,
+            exact_length=exact_length,
+            exact_status=exact_status,
+            aco_settings=aco_settings,
+            pso_settings=pso_settings,
+            target_gap_pct=target_gap_pct,
+            progress_callback=run_progress_callback,
+        )
+        row.update(
+            {
+                "city_count": int(instance["city_count"]),
+                "city_seed": instance["seed"],
+                "exact_status": exact_status,
+                "exact_length": None if exact_length is None else float(exact_length),
+                "exact_runtime_s": float(exact.get("runtime_s", exact.get("solve_time_s", 0.0))),
+                "exact_is_optimal": bool(exact.get("is_optimal", False)),
+                "exact_method": exact.get("method"),
+            }
+        )
+        rows.append(row)
+        completed_tasks += 1
+        emit_progress(
+            {
+                "type": "run_completed",
+                "task_index": task_index,
+                "task_total": total_tasks,
+                "model": task["model_label"],
+                "city_count": int(instance["city_count"]),
+                "config_value": int(task["config_value"]),
+                "status": row.get("status"),
+                "stopped_early": row.get("stopped_early"),
+                "batch_progress": completed_tasks / float(total_tasks or 1),
+                "current_progress": 1.0,
+                "exact_status": exact_status,
+            }
+        )
+
+    emit_progress(
+        {
+            "type": "batch_completed",
+            "task_total": total_tasks,
+            "batch_progress": 1.0,
+            "current_progress": 1.0,
+        }
+    )
 
     return {
         "instances": instances,

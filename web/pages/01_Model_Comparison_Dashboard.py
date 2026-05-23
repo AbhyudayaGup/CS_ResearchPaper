@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
 import sys
+import inspect
 from html import escape
 import streamlit as st
 
@@ -89,6 +92,93 @@ def _inject_css() -> None:
             margin-top: 6px;
             color: rgba(235,241,255,0.68);
             font-size: 0.86rem;
+        }
+        .race-card {
+            background: linear-gradient(135deg, rgba(10,16,27,0.96), rgba(22,31,50,0.96));
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            padding: 16px 18px 18px 18px;
+            margin-bottom: 14px;
+            box-shadow: 0 14px 36px rgba(0,0,0,0.22);
+        }
+        .race-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            color: #eef4ff;
+            font-weight: 800;
+            margin-bottom: 8px;
+            letter-spacing: -0.02em;
+        }
+        .race-subtitle {
+            color: rgba(235,241,255,0.72);
+            font-size: 0.88rem;
+            margin-bottom: 12px;
+        }
+        .race-track {
+            position: relative;
+            height: 20px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.11), rgba(255,255,255,0.04));
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+        }
+        .race-track::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient(
+                90deg,
+                rgba(255,255,255,0.04) 0,
+                rgba(255,255,255,0.04) 16px,
+                transparent 16px,
+                transparent 32px
+            );
+            animation: track-shift 1.1s linear infinite;
+        }
+        .race-fill {
+            position: absolute;
+            inset: 0 auto 0 0;
+            background: linear-gradient(90deg, #34d399 0%, #fbbf24 52%, #fb7185 100%);
+            box-shadow: 0 0 18px rgba(52,211,153,0.45);
+        }
+        .race-runner {
+            position: absolute;
+            top: -8px;
+            transform: translateX(-50%);
+            font-size: 1.15rem;
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.45));
+            animation: runner-bob 0.8s ease-in-out infinite alternate;
+        }
+        .race-finish {
+            position: absolute;
+            top: -10px;
+            right: 4px;
+            font-size: 1.15rem;
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.45));
+        }
+        .race-meter {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 8px;
+            color: rgba(235,241,255,0.8);
+            font-size: 0.84rem;
+        }
+        .race-flag {
+            color: #fde68a;
+            font-weight: 700;
+        }
+        @keyframes runner-bob {
+            from { transform: translateX(-50%) translateY(0); }
+            to { transform: translateX(-50%) translateY(-3px); }
+        }
+        @keyframes track-shift {
+            from { transform: translateX(0); }
+            to { transform: translateX(-32px); }
         }
         .table-wrap {
             overflow-x: auto;
@@ -235,6 +325,38 @@ def _render_insights(rows: list[dict]) -> None:
     st.markdown("<ul class='insight-list'>" + "".join(f"<li>{escape(text)}</li>" for text in insights) + "</ul>", unsafe_allow_html=True)
 
 
+def _render_race_banner(target, progress_pct: float, headline: str, detail: str, batch_label: str, batch_suffix: str = "") -> None:
+    progress_pct = max(0.0, min(100.0, progress_pct))
+    runner_left = max(2.0, min(98.0, progress_pct))
+    target.markdown(
+        f"""
+        <div class="race-card">
+            <div class="race-title">
+                <span>🏃 {escape(headline)}</span>
+                <span class="race-flag">{progress_pct:.1f}%</span>
+            </div>
+            <div class="race-subtitle">{escape(detail)}</div>
+            <div class="race-track">
+                <div class="race-fill" style="width: {progress_pct:.1f}%;"></div>
+                <div class="race-runner" style="left: {runner_left:.1f}%;">🏃‍➡️</div>
+                <div class="race-finish">🏁</div>
+            </div>
+            <div class="race-meter">
+                <span>{escape(batch_label)}</span>
+                <span>{escape(batch_suffix)}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _call_run_comparison_batch(**kwargs):
+    signature = inspect.signature(run_comparison_batch)
+    filtered = {name: value for name, value in kwargs.items() if name in signature.parameters}
+    return run_comparison_batch(**filtered)
+
+
 _inject_css()
 
 st.markdown(
@@ -273,6 +395,7 @@ with left:
     clustered = st.checkbox("Clustered city layouts", value=False)
     aco_two_opt = st.checkbox("Use 2-opt for ACO", value=True)
     pso_two_opt = st.checkbox("Use 2-opt for PSO", value=True)
+    target_gap_pct = st.number_input("Early stop gap threshold (%)", min_value=0.0, max_value=25.0, value=0.0, step=0.1, help="Stop as soon as a model gets within this gap of the exact solver. Use 0.0 to stop only on an exact match.")
 
     st.markdown("### ACO fine-tuning")
     aco_alpha = st.slider("alpha", min_value=0.1, max_value=5.0, value=1.0)
@@ -356,24 +479,114 @@ if run:
         "c2": pso_c2,
     }
 
-    with st.spinner("Running batch comparison..."):
-        model_config_values = {
-            "ACO": aco_configs,
-            "PSO": pso_configs,
-            "Bee Colony": [0],
-        }
-        report = run_comparison_batch(
-            selected_models,
-            city_sizes,
-            model_config_values,
-            iterations=int(iterations),
-            base_seed=None if int(base_seed) == 0 else int(base_seed),
-            clustered=clustered,
-            exact_timeout=int(exact_timeout),
-            aco_settings=aco_settings,
-            pso_settings=pso_settings,
-        )
-        rows = report["rows"]
+    model_config_values = {
+        "ACO": aco_configs,
+        "PSO": pso_configs,
+        "Bee Colony": [0],
+    }
+
+    estimated_runs = 0
+    for model_label in selected_models:
+        estimated_runs += len(city_sizes) * len(model_config_values.get(model_label, [0]))
+
+    progress_area = st.container()
+    overall_text = progress_area.empty()
+    overall_bar = progress_area.empty()
+    current_text = progress_area.empty()
+    current_bar = progress_area.empty()
+    current_banner = progress_area.empty()
+
+    rows: list[dict] = []
+    progress_state = {
+        "event": {
+            "type": "idle",
+            "batch_total": estimated_runs,
+            "batch_completed": 0,
+            "batch_progress": 0.0,
+            "current_progress": 0.0,
+        },
+        "report": None,
+        "error": None,
+        "done": False,
+    }
+    progress_lock = threading.Lock()
+
+    def update_progress(event: dict) -> None:
+        with progress_lock:
+            progress_state["event"] = dict(event)
+
+    def _run_batch_worker() -> None:
+        try:
+            report = _call_run_comparison_batch(
+                selected_models=selected_models,
+                city_sizes=city_sizes,
+                model_config_values=model_config_values,
+                iterations=int(iterations),
+                base_seed=None if int(base_seed) == 0 else int(base_seed),
+                clustered=clustered,
+                exact_timeout=int(exact_timeout),
+                aco_settings=aco_settings,
+                pso_settings=pso_settings,
+                target_gap_pct=float(target_gap_pct),
+                progress_callback=update_progress,
+            )
+            with progress_lock:
+                progress_state["report"] = report
+        except Exception as exc:
+            with progress_lock:
+                progress_state["error"] = exc
+        finally:
+            with progress_lock:
+                progress_state["done"] = True
+
+    worker = threading.Thread(target=_run_batch_worker, daemon=True)
+    worker.start()
+
+    animation_frames = ["🏃‍➡️", "🏃", "🏃‍♀️", "🏃‍♂️"]
+    animation_index = 0
+    while worker.is_alive():
+        with progress_lock:
+            event = dict(progress_state["event"])
+
+        batch_total = max(1, int(event.get("batch_total", estimated_runs)))
+        batch_completed = min(batch_total, int(event.get("batch_completed", 0)))
+        batch_progress = float(event.get("batch_progress", batch_completed / batch_total))
+        current_progress = float(event.get("current_progress", 0.0))
+        headline = "Batch comparison is running"
+        detail = "The models are sprinting toward the finish line."
+        batch_label = f"{batch_completed}/{batch_total} runs complete"
+        batch_suffix = f"{animation_frames[animation_index % len(animation_frames)]} in motion"
+
+        if event.get("type") == "run_started":
+            headline = f"{event.get('model', 'Model')} is on the track"
+            detail = f"{event.get('city_count')} cities · config {event.get('config_value')} · exact baseline: {event.get('exact_status')}"
+            batch_suffix = "next run queued"
+        elif event.get("type") == "iteration":
+            headline = f"{event.get('model', 'Model')} is sprinting"
+            detail = f"Iteration {event.get('iteration')}/{event.get('iterations_total')} · current best gap is closing"
+            batch_suffix = f"{current_progress * 100.0:.1f}% of this run"
+        elif event.get("type") == "run_completed":
+            headline = f"{event.get('model', 'Model')} crossed the line"
+            detail = f"Status: {event.get('status')} · early stop: {event.get('stopped_early')}"
+            batch_suffix = "run locked in"
+
+        overall_text.markdown(f"**Batch progress:** {batch_completed}/{batch_total} runs complete")
+        overall_bar.progress(int(round(batch_progress * 100.0)))
+        current_text.markdown(f"**Current run:** {headline} · {detail}")
+        current_bar.progress(int(round(max(0.0, min(1.0, current_progress)) * 100.0)))
+        _render_race_banner(current_banner, batch_progress * 100.0, headline, detail, batch_label, batch_suffix)
+
+        animation_index += 1
+        time.sleep(0.08)
+
+    worker.join()
+    with progress_lock:
+        if progress_state["error"] is not None:
+            raise progress_state["error"]
+        report = progress_state["report"]
+
+    rows = report["rows"]
+    _render_race_banner(current_banner, 100.0, "All batch runs finished", "The report is ready.", f"{estimated_runs}/{estimated_runs} runs complete", "full completion")
 
     st.markdown("### Batch summary")
     summary = build_model_summary(rows)

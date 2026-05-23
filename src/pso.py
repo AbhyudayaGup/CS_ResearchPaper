@@ -47,7 +47,7 @@ class ParticleSwarm:
         L = tour_length(tour, self.coords)
         return tour, L, 1
 
-    def run(self, callback=None, return_stats=False, target_length=None, target_tolerance=1e-9):
+    def run(self, callback=None, return_stats=False, target_length=None, target_gap_pct=0.0, target_tolerance=1e-9):
         best_tour = None
         best_len = float('inf')
         history = []
@@ -62,8 +62,15 @@ class ParticleSwarm:
         def reached_target(current_best: float) -> bool:
             if target_length is None:
                 return False
-            tolerance = max(float(target_tolerance), abs(float(target_length)) * 1e-6)
-            return abs(float(current_best) - float(target_length)) <= tolerance
+            target = float(target_length)
+            if target <= 0:
+                tolerance = max(float(target_tolerance), 1e-9)
+                return abs(float(current_best) - target) <= tolerance
+            gap_pct = ((float(current_best) - target) / target) * 100.0
+            tolerance = max(float(target_tolerance), 1e-6)
+            if abs(gap_pct) <= tolerance:
+                return True
+            return gap_pct <= float(target_gap_pct)
 
         # evaluate initial particles
         for i in range(self.n_particles):

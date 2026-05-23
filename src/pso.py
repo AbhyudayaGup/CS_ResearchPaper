@@ -47,16 +47,23 @@ class ParticleSwarm:
         L = tour_length(tour, self.coords)
         return tour, L, 1
 
-    def run(self, callback=None, return_stats=False):
+    def run(self, callback=None, return_stats=False, target_length=None, target_tolerance=1e-9):
         best_tour = None
         best_len = float('inf')
         history = []
         convergence_iteration = None
         best_found_iter = None
+        stopped_early = False
         t0 = time.perf_counter()
         objective_evals_total = 0
         objective_evals_to_convergence = None
         convergence_time_s = None
+
+        def reached_target(current_best: float) -> bool:
+            if target_length is None:
+                return False
+            tolerance = max(float(target_tolerance), abs(float(target_length)) * 1e-6)
+            return abs(float(current_best) - float(target_length)) <= tolerance
 
         # evaluate initial particles
         for i in range(self.n_particles):
@@ -72,43 +79,53 @@ class ParticleSwarm:
                 best_found_iter = 0
                 objective_evals_to_convergence = objective_evals_total
                 convergence_time_s = time.perf_counter() - t0
+                if reached_target(best_len):
+                    stopped_early = True
+                    break
 
-        for it in range(self.n_iterations):
-            for i in range(self.n_particles):
-                r1 = self.rng.random(self.n)
-                r2 = self.rng.random(self.n)
-                self.velocities[i] = (self.w * self.velocities[i] +
-                                       self.c1 * r1 * (self.pbest_pos[i] - self.positions[i]) +
-                                       self.c2 * r2 * (self.gbest_pos - self.positions[i]))
-                self.positions[i] = self.positions[i] + self.velocities[i]
-                # keep positions bounded
-                self.positions[i] = np.mod(self.positions[i], 1.0)
+        if not stopped_early:
+            for it in range(self.n_iterations):
+                for i in range(self.n_particles):
+                    r1 = self.rng.random(self.n)
+                    r2 = self.rng.random(self.n)
+                    self.velocities[i] = (self.w * self.velocities[i] +
+                                           self.c1 * r1 * (self.pbest_pos[i] - self.positions[i]) +
+                                           self.c2 * r2 * (self.gbest_pos - self.positions[i]))
+                    self.positions[i] = self.positions[i] + self.velocities[i]
+                    # keep positions bounded
+                    self.positions[i] = np.mod(self.positions[i], 1.0)
 
-                tour, L, eval_count = self._evaluate(self.positions[i])
-                objective_evals_total += eval_count
-                if L < self.pbest_score[i]:
-                    self.pbest_score[i] = L
-                    self.pbest_pos[i] = self.positions[i].copy()
-                if L < self.gbest_score:
-                    prev_best = self.gbest_score
-                    self.gbest_score = L
-                    self.gbest_pos = self.positions[i].copy()
-                    best_tour = tour
-                    best_len = L
-                    best_found_iter = it
-                    objective_evals_to_convergence = objective_evals_total
-                    convergence_time_s = time.perf_counter() - t0
-                    if convergence_iteration is None and self.gbest_score < prev_best:
-                        convergence_iteration = it
+                    tour, L, eval_count = self._evaluate(self.positions[i])
+                    objective_evals_total += eval_count
+                    if L < self.pbest_score[i]:
+                        self.pbest_score[i] = L
+                        self.pbest_pos[i] = self.positions[i].copy()
+                    if L < self.gbest_score:
+                        prev_best = self.gbest_score
+                        self.gbest_score = L
+                        self.gbest_pos = self.positions[i].copy()
+                        best_tour = tour
+                        best_len = L
+                        best_found_iter = it
+                        objective_evals_to_convergence = objective_evals_total
+                        convergence_time_s = time.perf_counter() - t0
+                        if convergence_iteration is None and self.gbest_score < prev_best:
+                            convergence_iteration = it
 
-            history.append(best_len)
-            if callback is not None:
-                callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+                history.append(best_len)
+                if callback is not None:
+                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+
+                if reached_target(best_len):
+                    stopped_early = True
+                    break
+            if stopped_early:
+                break
 
         if convergence_iteration is None:
-            convergence_iteration = self.n_iterations - 1
+            convergence_iteration = len(history) - 1 if history else 0
         if best_found_iter is None:
-            best_found_iter = self.n_iterations - 1
+            best_found_iter = len(history) - 1 if history else 0
             objective_evals_to_convergence = objective_evals_total
             convergence_time_s = time.perf_counter() - t0
 
@@ -120,6 +137,8 @@ class ParticleSwarm:
             "objective_evals_to_convergence": int(objective_evals_to_convergence),
             "convergence_iteration": int(convergence_iteration),
             "best_found_iteration": int(best_found_iter),
+            "iterations_executed": int(len(history)),
+            "stopped_early": bool(stopped_early),
         }
 
         if return_stats:

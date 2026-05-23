@@ -117,17 +117,25 @@ class AntColony:
                 self.pheromone[a, b] += delta
                 self.pheromone[b, a] += delta
 
-    def run(self, callback=None, return_stats=False):
+    def run(self, callback=None, return_stats=False, target_length=None, target_tolerance=1e-9):
         best_tour = None
         best_len = float('inf')
         history = []
         convergence_iteration = None
         initial_worst = float('inf')
         best_found_iter = None
+        stopped_early = False
         t0 = time.perf_counter()
         objective_evals_total = 0
         objective_evals_to_convergence = None
         convergence_time_s = None
+
+        def reached_target(current_best: float) -> bool:
+            if target_length is None:
+                return False
+            tolerance = max(float(target_tolerance), abs(float(target_length)) * 1e-6)
+            return abs(float(current_best) - float(target_length)) <= tolerance
+
         for it in range(self.n_iterations):
             tours, lengths, eval_count = self._construct_solutions()
             objective_evals_total += eval_count
@@ -161,10 +169,14 @@ class AntColony:
             history.append(best_len)
             if callback is not None:
                 callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+
+            if reached_target(best_len):
+                stopped_early = True
+                break
         if convergence_iteration is None:
-            convergence_iteration = self.n_iterations - 1
+            convergence_iteration = len(history) - 1 if history else 0
         if best_found_iter is None:
-            best_found_iter = self.n_iterations - 1
+            best_found_iter = len(history) - 1 if history else 0
             objective_evals_to_convergence = objective_evals_total
             convergence_time_s = time.perf_counter() - t0
 
@@ -176,6 +188,8 @@ class AntColony:
             "objective_evals_to_convergence": int(objective_evals_to_convergence),
             "convergence_iteration": int(convergence_iteration),
             "best_found_iteration": int(best_found_iter),
+            "iterations_executed": int(len(history)),
+            "stopped_early": bool(stopped_early),
         }
 
         if return_stats:

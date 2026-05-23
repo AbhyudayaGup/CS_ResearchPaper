@@ -11,7 +11,8 @@ Current UI behavior:
 	- `Convergence time (s)`
 	- `Evals to convergence`
 	- `Total objective evals`
-- Each run is appended to `results/model_comparison_runs.csv` for cross-model benchmarking.
+- A separate `Model Comparison Dashboard` page is available from the Streamlit sidebar for batch benchmarking across many city sizes and configurations.
+- CSV logging has been removed; comparison results stay in-memory and render directly in the UI.
 
 Quick start:
 
@@ -28,6 +29,8 @@ pip install -r requirements.txt
 ```powershell
 streamlit run web/app.py
 ```
+
+From there, open `Model Comparison Dashboard` in the sidebar to run batch comparisons across selected models.
 
 Important: run that command from the project root folder `C:\Users\abhyu\Documents\coding\CS_ResearchPaper`, not from inside `web/`.
 
@@ -75,11 +78,13 @@ Run tests (after installing requirements):
 pytest -q
 ```
 
-Run a parameter sweep example (will save CSV to `results/`):
+Run a parameter sweep example (returns comparison rows in memory):
 
 ```bash
 python -m src.experiment
 ``` 
+
+Note: the new dashboard and comparison harness do not write CSV files. They generate on-screen table reports and insight summaries instead.
 
 Exact solver notes:
 - For very small instances, the app uses brute force.
@@ -93,9 +98,11 @@ Notes:
 Files:
 - `src/aco.py` — AntColony implementation with optional 2-opt.
 - `src/pso.py` — Particle Swarm Optimization (random-key encoding) with optional 2-opt.
+- `src/comparison.py` — batch comparison helpers and report/insight generation.
 - `src/exact_solver.py` — exact TSP solver (brute force + CP-SAT up to 50 cities).
 - `src/utils.py` — random instance generator and distance matrix.
-- `web/app.py` — Streamlit UI to run and visualize ACO/PSO with comparison metrics and CSV logging.
+- `web/app.py` — Streamlit UI to run and visualize ACO/PSO with comparison metrics.
+- `web/pages/01_Model_Comparison_Dashboard.py` — batch comparison dashboard with HTML/CSS report rendering.
 - `src/runner.py` — simple CLI runner that saves results to `results/`.
 
 If you'd like, I'll implement tests, parameter-sweep harness, GIF export, and polish the UI next.

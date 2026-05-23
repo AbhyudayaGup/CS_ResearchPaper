@@ -1,9 +1,7 @@
 from pathlib import Path
 import sys
-import csv
 import inspect
 import time
-from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -18,31 +16,7 @@ from src.utils import generate_cities
 from src.pso import ParticleSwarm
 
 
-st.set_page_config(layout="wide", page_title="TSP Exact vs ACO")
-
-
-def _append_run_csv(row: dict) -> None:
-    results_dir = ROOT / "results"
-    results_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = results_dir / "model_comparison_runs.csv"
-    fieldnames = [
-        "timestamp",
-        "model",
-        "num_cities",
-        "best_len",
-        "optimality_gap_pct",
-        "best_found_iteration",
-        "convergence_time_s",
-        "objective_evals_to_convergence",
-        "objective_evals_total",
-        "run_time_s",
-    ]
-    write_header = not csv_path.exists()
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+st.set_page_config(layout="wide", page_title="TSP Visual Lab")
 
 
 def _run_optimizer_with_optional_stats(optimizer, callback):
@@ -130,7 +104,7 @@ def _init_state() -> None:
 
 _init_state()
 
-st.title("TSP Visual Lab: Exact vs ACO")
+st.title("TSP Visual Lab: ACO / PSO Explorer")
 
 # Left sidebar: TSP generation only
 st.sidebar.header("TSP Instance Generator")
@@ -459,20 +433,6 @@ with right_col:
             }
             st.session_state["last_run"] = run_summary
 
-            _append_run_csv(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "model": "ACO",
-                    "num_cities": int(len(coords)),
-                    "best_len": float(best_len),
-                    "optimality_gap_pct": "" if gap_value is None else float(gap_value),
-                    "best_found_iteration": int(stats["best_found_iteration"]),
-                    "convergence_time_s": float(stats["convergence_time_s"]),
-                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                    "objective_evals_total": int(stats["objective_evals_total"]),
-                    "run_time_s": float(stats["run_time_s"]),
-                }
-            )
         elif algorithm == "Particle Swarm Optimization":
             pso_seed = None if int(st.session_state.get("pso_seed", 0)) == 0 else int(st.session_state.get("pso_seed", 0))
             pso = ParticleSwarm(
@@ -570,20 +530,6 @@ with right_col:
             }
             st.session_state["last_run"] = run_summary
 
-            _append_run_csv(
-                {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "model": "PSO",
-                    "num_cities": int(len(coords)),
-                    "best_len": float(best_len),
-                    "optimality_gap_pct": "" if gap_value is None else float(gap_value),
-                    "best_found_iteration": int(stats["best_found_iteration"]),
-                    "convergence_time_s": float(stats["convergence_time_s"]),
-                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                    "objective_evals_total": int(stats["objective_evals_total"]),
-                    "run_time_s": float(stats["run_time_s"]),
-                }
-            )
         else:
             st.info("Selected algorithm is a placeholder. ACO and PSO are implemented; others will be added next.")
 
@@ -609,6 +555,5 @@ with right_col:
         insights = _build_run_insights(run_data)
         for item in insights:
             st.markdown(f"- {item}")
-        st.caption("Metrics are appended to results/model_comparison_runs.csv after every completed run.")
     else:
         st.info("Run an algorithm to see formatted summary cards and performance insights.")

@@ -19,12 +19,18 @@ from src.pso import ParticleSwarm
 st.set_page_config(layout="wide", page_title="TSP Visual Lab")
 
 
-def _run_optimizer_with_optional_stats(optimizer, callback):
+def _run_optimizer_with_optional_stats(optimizer, callback, target_length=None):
     run_fn = getattr(optimizer, "run")
     try:
         sig = inspect.signature(run_fn)
+        kwargs = {"callback": callback}
         if "return_stats" in sig.parameters:
-            return run_fn(callback=callback, return_stats=True)
+            kwargs["return_stats"] = True
+        if target_length is not None and "target_length" in sig.parameters:
+            kwargs["target_length"] = target_length
+        if target_length is not None and "target_tolerance" in sig.parameters:
+            kwargs["target_tolerance"] = 1e-9
+        return run_fn(**kwargs)
     except (TypeError, ValueError):
         # If signature inspection fails for any reason, fall back safely.
         pass
@@ -381,7 +387,7 @@ with right_col:
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(ac, cb)
+            run_result = _run_optimizer_with_optional_stats(ac, cb, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
             elapsed_s = time.perf_counter() - run_start
             best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
             if isinstance(run_result, tuple):
@@ -428,6 +434,8 @@ with right_col:
                 "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
                 "objective_evals_total": int(stats["objective_evals_total"]),
                 "run_time_s": float(stats["run_time_s"]),
+                "iterations_executed": int(stats.get("iterations_executed", st.session_state["aco_iterations"])),
+                "stopped_early": bool(stats.get("stopped_early", False)),
                 "iterations": int(st.session_state["aco_iterations"]),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
@@ -478,7 +486,7 @@ with right_col:
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(pso, cb_pso)
+            run_result = _run_optimizer_with_optional_stats(pso, cb_pso, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
             elapsed_s = time.perf_counter() - run_start
             best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
             if isinstance(run_result, tuple):
@@ -525,6 +533,8 @@ with right_col:
                 "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
                 "objective_evals_total": int(stats["objective_evals_total"]),
                 "run_time_s": float(stats["run_time_s"]),
+                "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("pso_iterations", 200))),
+                "stopped_early": bool(stats.get("stopped_early", False)),
                 "iterations": int(st.session_state.get("pso_iterations", 200)),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
@@ -550,6 +560,16 @@ with right_col:
         m5.metric("Best found iteration", f"{run_data['best_found_iteration']}")
         m6.metric("Evals to convergence", f"{run_data['objective_evals_to_convergence']:,}")
         m7.metric("Total evals", f"{run_data['objective_evals_total']:,}")
+
+        st.markdown("### Stop Condition")
+        if run_data.get("stopped_early"):
+            st.success(
+                f"Stopped early after {run_data['iterations_executed']} iterations because the model matched the exact route length within tolerance."
+            )
+        else:
+            st.info(
+                f"No exact match was reached, so the model used the full budget of {run_data['iterations']} iterations."
+            )
 
         st.markdown("### Insights")
         insights = _build_run_insights(run_data)

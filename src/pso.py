@@ -119,8 +119,6 @@ class ParticleSwarm:
                 if reached_target(best_len):
                     stopped_early = True
                     break
-            if stopped_early:
-                break
 
         if convergence_iteration is None:
             convergence_iteration = len(history) - 1 if history else 0

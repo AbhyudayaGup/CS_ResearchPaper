@@ -189,10 +189,10 @@ def _render_table(rows: list[dict], selected_models: list[str]) -> None:
     html.append("<thead>")
     html.append("<tr><th rowspan='2'>Cities</th><th rowspan='2'>Config</th><th rowspan='2'>Exact Length</th><th rowspan='2'>Exact Status</th>")
     for model in header_models:
-        html.append(f"<th colspan='4'>{escape(model)}</th>")
+        html.append(f"<th colspan='6'>{escape(model)}</th>")
     html.append("</tr><tr>")
     for _ in header_models:
-        html.append("<th>Time (s)</th><th>Converged</th><th>Evals</th><th>Gap %</th>")
+        html.append("<th>Time (s)</th><th>Converged</th><th>Early Stop</th><th>Iters Used</th><th>Evals</th><th>Gap %</th>")
     html.append("</tr></thead><tbody>")
 
     for (city_count, config_value), model_map in sorted(grouped.items()):
@@ -211,14 +211,17 @@ def _render_table(rows: list[dict], selected_models: list[str]) -> None:
                 continue
             status = model_row.get("status")
             if status != "complete":
-                html.append(f"<td colspan='4' class='badge-off'>{escape(str(status))}</td>")
+                html.append(f"<td colspan='6' class='badge-off'>{escape(str(status))}</td>")
                 continue
             converged = "Yes" if model_row.get("optimal_match") else "No"
             converged_class = "badge-ok" if model_row.get("optimal_match") else "badge-warn"
             gap_value = model_row.get("optimality_gap_pct")
             gap_text = "N/A" if gap_value is None else f"{float(gap_value):.3f}"
+            early_stop = "Yes" if model_row.get("stopped_early") else "No"
+            early_class = "badge-ok" if model_row.get("stopped_early") else "badge-off"
+            iters_used = int(model_row.get("iterations_executed") or 0)
             html.append(
-                f"<td>{float(model_row['run_time_s']):.4f}</td><td class='{converged_class}'>{converged}</td><td>{int(model_row['objective_evals_to_convergence']):,}</td><td>{gap_text}</td>"
+                f"<td>{float(model_row['run_time_s']):.4f}</td><td class='{converged_class}'>{converged}</td><td class='{early_class}'>{early_stop}</td><td>{iters_used}</td><td>{int(model_row['objective_evals_to_convergence']):,}</td><td>{gap_text}</td>"
             )
         html.append("</tr>")
 

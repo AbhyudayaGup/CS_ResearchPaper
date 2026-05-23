@@ -152,6 +152,8 @@ def _fallback_stats(model_key: str, history, best_len, best_found_iter, converge
         "objective_evals_total": objective_evals_total,
         "objective_evals_to_convergence": objective_evals_to_convergence,
         "best_found_iteration": int(best_iter),
+        "iterations_executed": int(history_len),
+        "stopped_early": bool(history_len > 0 and best_found_iter is not None and best_found_iter < history_len - 1),
     }
 
 
@@ -229,6 +231,8 @@ def run_algorithm_on_instance(
         "objective_evals_total": None,
         "run_time_s": None,
         "matched_exact": None,
+        "iterations_executed": None,
+        "stopped_early": None,
     }
 
     if not spec.runnable:
@@ -301,6 +305,8 @@ def run_algorithm_on_instance(
             "objective_evals_total": int(stats["objective_evals_total"]),
             "run_time_s": float(stats["run_time_s"]),
             "matched_exact": optimal_match,
+            "iterations_executed": int(stats.get("iterations_executed", iterations)),
+            "stopped_early": bool(stats.get("stopped_early", False)),
         }
     )
     return base

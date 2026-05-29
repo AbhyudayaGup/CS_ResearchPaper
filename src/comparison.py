@@ -6,8 +6,10 @@ import time
 
 import numpy as np
 
+from .abc import ArtificialBeeColony
 from .aco import AntColony
 from .exact_solver import solve_tsp_exact
+from .ga import GeneticAlgorithm
 from .pso import ParticleSwarm
 from .utils import generate_cities
 
@@ -37,11 +39,18 @@ AVAILABLE_ALGORITHMS: List[AlgorithmSpec] = [
         description="Particle Swarm Optimization using random-key permutation decoding.",
     ),
     AlgorithmSpec(
-        key="bee",
-        label="Bee Colony",
-        config_label="bees",
-        runnable=False,
-        description="Coming soon.",
+        key="abc",
+        label="ABC",
+        config_label="food_sources",
+        runnable=True,
+        description="Artificial Bee Colony with employed, onlooker, and scout phases.",
+    ),
+    AlgorithmSpec(
+        key="ga",
+        label="GA",
+        config_label="population",
+        runnable=True,
+        description="Genetic Algorithm using permutation crossover, mutation, and elite retention.",
     ),
 ]
 
@@ -216,6 +225,65 @@ def _run_pso(coords: np.ndarray, config_value: int, *, iterations: int, seed: in
     return best_tour, best_len, history, convergence_iteration, best_found_iter, stats
 
 
+def _run_abc(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, limit: int, target_length: float | None = None, target_gap_pct: float = 0.0, progress_callback: Callable[[Dict[str, Any]], None] | None = None):
+    model = ArtificialBeeColony(
+        coords,
+        n_food_sources=int(config_value),
+        n_iterations=int(iterations),
+        limit=int(limit),
+        apply_two_opt=bool(two_opt),
+        seed=seed,
+    )
+    started = time.perf_counter()
+
+    def _callback(**payload: Any) -> None:
+        if progress_callback is not None:
+            progress_callback(payload)
+
+    run_result = model.run(
+        callback=_callback if progress_callback is not None else None,
+        return_stats=True,
+        target_length=target_length,
+        target_gap_pct=target_gap_pct,
+    )
+    elapsed_s = time.perf_counter() - started
+    best_tour, best_len, history, convergence_iteration, best_found_iter, stats = _extract_run_result(run_result)
+    if stats is None:
+        stats = _fallback_stats("abc", history, best_len, best_found_iter, convergence_iteration, elapsed_s, int(config_value))
+    return best_tour, best_len, history, convergence_iteration, best_found_iter, stats
+
+
+def _run_ga(coords: np.ndarray, config_value: int, *, iterations: int, seed: int | None, two_opt: bool, crossover_rate: float, mutation_rate: float, elite_fraction: float, tournament_size: int, target_length: float | None = None, target_gap_pct: float = 0.0, progress_callback: Callable[[Dict[str, Any]], None] | None = None):
+    model = GeneticAlgorithm(
+        coords,
+        n_population=int(config_value),
+        n_iterations=int(iterations),
+        crossover_rate=float(crossover_rate),
+        mutation_rate=float(mutation_rate),
+        elite_fraction=float(elite_fraction),
+        tournament_size=int(tournament_size),
+        apply_two_opt=bool(two_opt),
+        seed=seed,
+    )
+    started = time.perf_counter()
+
+    def _callback(**payload: Any) -> None:
+        if progress_callback is not None:
+            progress_callback(payload)
+
+    run_result = model.run(
+        callback=_callback if progress_callback is not None else None,
+        return_stats=True,
+        target_length=target_length,
+        target_gap_pct=target_gap_pct,
+    )
+    elapsed_s = time.perf_counter() - started
+    best_tour, best_len, history, convergence_iteration, best_found_iter, stats = _extract_run_result(run_result)
+    if stats is None:
+        stats = _fallback_stats("ga", history, best_len, best_found_iter, convergence_iteration, elapsed_s, int(config_value))
+    return best_tour, best_len, history, convergence_iteration, best_found_iter, stats
+
+
 def run_algorithm_on_instance(
     algorithm_label: str,
     coords: np.ndarray,
@@ -227,9 +295,13 @@ def run_algorithm_on_instance(
     exact_status: str | None,
     aco_settings: Dict[str, Any],
     pso_settings: Dict[str, Any],
+    abc_settings: Dict[str, Any] | None = None,
+    ga_settings: Dict[str, Any] | None = None,
     target_gap_pct: float = 0.0,
     progress_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
+    abc_settings = abc_settings or {}
+    ga_settings = ga_settings or {}
     spec = spec_by_label(algorithm_label)
     base: Dict[str, Any] = {
         "model": spec.label,
@@ -295,6 +367,33 @@ def run_algorithm_on_instance(
             target_gap_pct=target_gap_pct,
             progress_callback=progress_callback,
         )
+    elif spec.key == "abc":
+        _, best_len, _, convergence_iteration, best_found_iter, stats = _run_abc(
+            coords,
+            config_value,
+            iterations=iterations,
+            seed=seed,
+            two_opt=abc_settings.get("two_opt", True),
+            limit=abc_settings.get("limit", max(5, int(config_value) * 3)),
+            target_length=target_length,
+            target_gap_pct=target_gap_pct,
+            progress_callback=progress_callback,
+        )
+    elif spec.key == "ga":
+        _, best_len, _, convergence_iteration, best_found_iter, stats = _run_ga(
+            coords,
+            config_value,
+            iterations=iterations,
+            seed=seed,
+            two_opt=ga_settings.get("two_opt", True),
+            crossover_rate=ga_settings.get("crossover_rate", 0.9),
+            mutation_rate=ga_settings.get("mutation_rate", 0.2),
+            elite_fraction=ga_settings.get("elite_fraction", 0.1),
+            tournament_size=ga_settings.get("tournament_size", 3),
+            target_length=target_length,
+            target_gap_pct=target_gap_pct,
+            progress_callback=progress_callback,
+        )
     else:
         base.update(
             {
@@ -349,9 +448,13 @@ def run_comparison_batch(
     exact_timeout: int,
     aco_settings: Dict[str, Any],
     pso_settings: Dict[str, Any],
+    abc_settings: Dict[str, Any] | None = None,
+    ga_settings: Dict[str, Any] | None = None,
     target_gap_pct: float = 0.0,
     progress_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
+    abc_settings = abc_settings or {}
+    ga_settings = ga_settings or {}
     instances = build_city_instances(city_sizes, base_seed, clustered)
     rows: List[Dict[str, Any]] = []
     tasks: List[Dict[str, Any]] = []
@@ -435,6 +538,8 @@ def run_comparison_batch(
             exact_status=exact_status,
             aco_settings=aco_settings,
             pso_settings=pso_settings,
+            abc_settings=abc_settings,
+            ga_settings=ga_settings,
             target_gap_pct=target_gap_pct,
             progress_callback=run_progress_callback,
         )

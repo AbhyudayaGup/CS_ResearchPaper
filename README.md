@@ -6,7 +6,7 @@ Current UI behavior:
 - Left sidebar controls only TSP instance generation (cities/seed/layout/time limit for exact solver).
 - ACO settings are independent and configured from the right panel via `Configure ACO`.
 - Every time a new TSP instance is generated, the app automatically computes an exact/optimal route and shows it below the city map.
-- Right panel includes an algorithm dropdown with implemented `ACO` and `PSO` (Bee Colony placeholder).
+- Right panel includes an algorithm dropdown with implemented `ACO`, `ABC`, `GA`, and `PSO`.
 - After each model run, the app shows comparison cards:
 	- `Convergence time (s)`
 	- `Evals to convergence`

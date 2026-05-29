@@ -369,7 +369,7 @@ st.markdown(
         </div>
         <div class="pill-row">
             <span class="pill">4 default city sizes: 10, 20, 30, 40</span>
-            <span class="pill">3 default ACO / PSO configs: 10, 20, 40</span>
+            <span class="pill">3 default configs per runnable model: 10, 20, 40</span>
             <span class="pill">12 runs per model at defaults</span>
             <span class="pill">No CSV logging</span>
         </div>
@@ -388,12 +388,16 @@ with left:
     st.markdown("### Batch settings")
     city_sizes_raw = st.text_input("City sizes", value="10, 20, 30, 40", help="Comma-separated list of TSP sizes to run.")
     aco_configs_raw = st.text_input("ACO ants", value="10, 20, 40", help="Comma-separated list of ant counts.")
+    abc_configs_raw = st.text_input("ABC food sources", value="10, 20, 40", help="Comma-separated list of food-source counts.")
+    ga_configs_raw = st.text_input("GA population", value="10, 20, 40", help="Comma-separated list of population sizes.")
     pso_configs_raw = st.text_input("PSO particles", value="10, 20, 40", help="Comma-separated list of particle counts.")
     iterations = st.number_input("Iterations per run", min_value=1, max_value=5000, value=200, step=10)
     exact_timeout = st.slider("Exact solver time limit (seconds)", min_value=10, max_value=300, value=60)
     base_seed = st.number_input("Base random seed", min_value=0, value=7, step=1)
     clustered = st.checkbox("Clustered city layouts", value=False)
     aco_two_opt = st.checkbox("Use 2-opt for ACO", value=True)
+    abc_two_opt = st.checkbox("Use 2-opt for ABC", value=True)
+    ga_two_opt = st.checkbox("Use 2-opt for GA", value=True)
     pso_two_opt = st.checkbox("Use 2-opt for PSO", value=True)
     target_gap_pct = st.number_input("Early stop gap threshold (%)", min_value=0.0, max_value=25.0, value=0.0, step=0.1, help="Stop as soon as a model gets within this gap of the exact solver. Use 0.0 to stop only on an exact match.")
 
@@ -402,6 +406,15 @@ with left:
     aco_beta = st.slider("beta", min_value=0.1, max_value=10.0, value=5.0)
     aco_rho = st.slider("rho", min_value=0.01, max_value=0.99, value=0.5)
     aco_q = st.number_input("Q", min_value=0.1, value=100.0)
+
+    st.markdown("### ABC fine-tuning")
+    abc_limit = st.number_input("Scout limit", min_value=1, max_value=20000, value=60)
+
+    st.markdown("### GA fine-tuning")
+    ga_crossover_rate = st.slider("Crossover rate", min_value=0.0, max_value=1.0, value=0.9)
+    ga_mutation_rate = st.slider("Mutation rate", min_value=0.0, max_value=1.0, value=0.2)
+    ga_elite_fraction = st.slider("Elite fraction", min_value=0.0, max_value=0.5, value=0.1)
+    ga_tournament_size = st.number_input("Tournament size", min_value=2, max_value=50, value=3)
 
     st.markdown("### PSO fine-tuning")
     pso_w = st.slider("w", min_value=0.0, max_value=1.5, value=0.5)
@@ -420,10 +433,16 @@ with right:
     st.markdown("### Effective run matrix")
     city_sizes = parse_int_list(city_sizes_raw, fallback=[10, 20, 30, 40])
     aco_configs = parse_int_list(aco_configs_raw, fallback=[10, 20, 40])
+    abc_configs = parse_int_list(abc_configs_raw, fallback=[10, 20, 40])
+    ga_configs = parse_int_list(ga_configs_raw, fallback=[10, 20, 40])
     pso_configs = parse_int_list(pso_configs_raw, fallback=[10, 20, 40])
     estimated_runs = 0
     if "ACO" in selected_models:
         estimated_runs += len(city_sizes) * len(aco_configs)
+    if "ABC" in selected_models:
+        estimated_runs += len(city_sizes) * len(abc_configs)
+    if "GA" in selected_models:
+        estimated_runs += len(city_sizes) * len(ga_configs)
     if "PSO" in selected_models:
         estimated_runs += len(city_sizes) * len(pso_configs)
     st.markdown(
@@ -437,6 +456,16 @@ with right:
             <div class="metric-label">ACO configs</div>
             <div class="metric-value">{', '.join(map(str, aco_configs))}</div>
             <div class="metric-note">{len(aco_configs)} ant-count settings</div>
+        </div>
+        <div class="panel-card">
+            <div class="metric-label">ABC configs</div>
+            <div class="metric-value">{', '.join(map(str, abc_configs))}</div>
+            <div class="metric-note">{len(abc_configs)} food-source settings</div>
+        </div>
+        <div class="panel-card">
+            <div class="metric-label">GA configs</div>
+            <div class="metric-value">{', '.join(map(str, ga_configs))}</div>
+            <div class="metric-note">{len(ga_configs)} population settings</div>
         </div>
         <div class="panel-card">
             <div class="metric-label">PSO configs</div>
@@ -472,6 +501,17 @@ if run:
         "rho": aco_rho,
         "Q": aco_q,
     }
+    abc_settings = {
+        "two_opt": abc_two_opt,
+        "limit": abc_limit,
+    }
+    ga_settings = {
+        "two_opt": ga_two_opt,
+        "crossover_rate": ga_crossover_rate,
+        "mutation_rate": ga_mutation_rate,
+        "elite_fraction": ga_elite_fraction,
+        "tournament_size": ga_tournament_size,
+    }
     pso_settings = {
         "two_opt": pso_two_opt,
         "w": pso_w,
@@ -481,8 +521,9 @@ if run:
 
     model_config_values = {
         "ACO": aco_configs,
+        "ABC": abc_configs,
+        "GA": ga_configs,
         "PSO": pso_configs,
-        "Bee Colony": [0],
     }
 
     estimated_runs = 0
@@ -526,6 +567,8 @@ if run:
                 clustered=clustered,
                 exact_timeout=int(exact_timeout),
                 aco_settings=aco_settings,
+                abc_settings=abc_settings,
+                ga_settings=ga_settings,
                 pso_settings=pso_settings,
                 target_gap_pct=float(target_gap_pct),
                 progress_callback=update_progress,

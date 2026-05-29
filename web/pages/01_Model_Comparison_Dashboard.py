@@ -252,13 +252,29 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
         st.info("Run a batch to generate summary cards.")
         return
     def _best_models_min(key: str) -> str:
-        best_value = min(float(row[key]) for row in summary_rows)
-        winners = [row["model"] for row in summary_rows if abs(float(row[key]) - best_value) <= 1e-12]
+        numeric_rows = []
+        for row in summary_rows:
+            try:
+                numeric_rows.append((float(row[key]), row["model"]))
+            except Exception:
+                continue
+        if not numeric_rows:
+            return "N/A"
+        best_value = min(val for val, _ in numeric_rows)
+        winners = [model for val, model in numeric_rows if abs(val - best_value) <= 1e-12]
         return ", ".join(winners)
 
     def _best_models_max(key: str) -> str:
-        best_value = max(float(row[key]) for row in summary_rows)
-        winners = [row["model"] for row in summary_rows if abs(float(row[key]) - best_value) <= 1e-12]
+        numeric_rows = []
+        for row in summary_rows:
+            try:
+                numeric_rows.append((float(row[key]), row["model"]))
+            except Exception:
+                continue
+        if not numeric_rows:
+            return "N/A"
+        best_value = max(val for val, _ in numeric_rows)
+        winners = [model for val, model in numeric_rows if abs(val - best_value) <= 1e-12]
         return ", ".join(winners)
 
     best_time = _best_models_min("avg_convergence_time_s")
@@ -267,12 +283,31 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
     best_hits = _best_models_max("optimal_hits")
     best_runtime = _best_models_min("avg_run_time_s")
     best_match_rate = _best_models_max("exact_match_rate")
-    total_runs = sum(row["runs"] for row in summary_rows)
-    best_gap_value = min(summary_rows, key=lambda row: row["avg_gap_pct"])["avg_gap_pct"]
-    best_time_value = min(summary_rows, key=lambda row: row["avg_convergence_time_s"])["avg_convergence_time_s"]
-    best_evals_value = min(summary_rows, key=lambda row: row["avg_evals_to_convergence"])["avg_evals_to_convergence"]
-    best_runtime_value = min(summary_rows, key=lambda row: row["avg_run_time_s"])["avg_run_time_s"]
-    best_match_rate_value = max(summary_rows, key=lambda row: row["exact_match_rate"])["exact_match_rate"]
+    total_runs = sum(int(row.get("runs", 0)) for row in summary_rows)
+
+    def _safe_agg_min(key: str, fallback: float = float("nan")) -> float:
+        vals = []
+        for row in summary_rows:
+            try:
+                vals.append(float(row[key]))
+            except Exception:
+                continue
+        return min(vals) if vals else fallback
+
+    def _safe_agg_max(key: str, fallback: float = float("nan")) -> float:
+        vals = []
+        for row in summary_rows:
+            try:
+                vals.append(float(row[key]))
+            except Exception:
+                continue
+        return max(vals) if vals else fallback
+
+    best_gap_value = _safe_agg_min("avg_gap_pct", 0.0)
+    best_time_value = _safe_agg_min("avg_convergence_time_s", 0.0)
+    best_evals_value = _safe_agg_min("avg_evals_to_convergence", 0.0)
+    best_runtime_value = _safe_agg_min("avg_run_time_s", 0.0)
+    best_match_rate_value = _safe_agg_max("exact_match_rate", 0.0)
     st.markdown(
         f"""
         <div class="metric-grid">

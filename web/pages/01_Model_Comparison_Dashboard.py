@@ -308,13 +308,45 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
     best_evals_value = _safe_agg_min("avg_evals_to_convergence", 0.0)
     best_runtime_value = _safe_agg_min("avg_run_time_s", 0.0)
     best_match_rate_value = _safe_agg_max("exact_match_rate", 0.0)
+    def _rank_min_list(key: str, fmt: str = "{:.3f}", unit: str = "") -> str:
+        pairs = []
+        for row in summary_rows:
+            try:
+                pairs.append((row["model"], float(row[key])))
+            except Exception:
+                continue
+        if not pairs:
+            return "<div class='metric-note'>N/A</div>"
+        pairs.sort(key=lambda t: t[1])
+        html = ["<ol style='margin:6px 0 0 18px;padding-left:18px'>"]
+        for model, val in pairs:
+            html.append(f"<li style='margin-bottom:4px'>{escape(model)}: {fmt.format(val)}{unit}</li>")
+        html.append("</ol>")
+        return "".join(html)
+
+    def _rank_max_list(key: str, fmt: str = "{:.3f}", unit: str = "") -> str:
+        pairs = []
+        for row in summary_rows:
+            try:
+                pairs.append((row["model"], float(row[key])))
+            except Exception:
+                continue
+        if not pairs:
+            return "<div class='metric-note'>N/A</div>"
+        pairs.sort(key=lambda t: t[1], reverse=True)
+        html = ["<ol style='margin:6px 0 0 18px;padding-left:18px'>"]
+        for model, val in pairs:
+            html.append(f"<li style='margin-bottom:4px'>{escape(model)}: {fmt.format(val)}{unit}</li>")
+        html.append("</ol>")
+        return "".join(html)
+
     st.markdown(
         f"""
         <div class="metric-grid">
             <div class="metric-card"><div class="metric-label">Best Average Quality</div><div class="metric-value">{escape(best_gap)}</div><div class="metric-note">{best_gap_value:.3f}% gap</div></div>
-            <div class="metric-card"><div class="metric-label">Fastest Average Convergence</div><div class="metric-value">{escape(best_time)}</div><div class="metric-note">{best_time_value:.4f} s</div></div>
-            <div class="metric-card"><div class="metric-label">Lowest Eval Effort</div><div class="metric-value">{escape(best_evals)}</div><div class="metric-note">{best_evals_value:.0f} evals</div></div>
-            <div class="metric-card"><div class="metric-label">Lowest Total Runtime</div><div class="metric-value">{escape(best_runtime)}</div><div class="metric-note">{best_runtime_value:.4f} s</div></div>
+            <div class="metric-card"><div class="metric-label">Convergence Time Ranking</div><div class="metric-value">{escape(best_time)}</div><div class="metric-note">Top to bottom (fast → slow){_rank_min_list('avg_convergence_time_s','{:.4f}',' s')}</div></div>
+            <div class="metric-card"><div class="metric-label">Compute Effort Ranking</div><div class="metric-value">{escape(best_evals)}</div><div class="metric-note">Top to bottom (low → high){_rank_min_list('avg_evals_to_convergence','{:.0f}',' evals')}</div></div>
+            <div class="metric-card"><div class="metric-label">Total Runtime Ranking</div><div class="metric-value">{escape(best_runtime)}</div><div class="metric-note">Top to bottom (fast → slow){_rank_min_list('avg_run_time_s','{:.4f}',' s')}</div></div>
             <div class="metric-card"><div class="metric-label">Highest Exact-Match Rate</div><div class="metric-value">{escape(best_match_rate)}</div><div class="metric-note">{best_match_rate_value * 100.0:.1f}% of runs</div></div>
             <div class="metric-card"><div class="metric-label">Most Exact Matches</div><div class="metric-value">{escape(best_hits)}</div><div class="metric-note">Across the selected scenarios</div></div>
             <div class="metric-card"><div class="metric-label">Total Completed Runs</div><div class="metric-value">{total_runs}</div><div class="metric-note">Across all selected configurations</div></div>

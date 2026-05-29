@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
 
 import plotly.graph_objects as go
 import streamlit as st
+import numpy as np
 
 from src.aco import AntColony
 from src.abc import ArtificialBeeColony
@@ -198,7 +199,92 @@ def _base_city_trace(fig: go.Figure) -> None:
     )
 
 
+def _add_blocked_edges_overlay(fig: go.Figure, *, mode: str, iteration: int | None = None) -> None:
+    """Draw blocked/inaccessible edges on a figure.
+
+    For noisy mode we show a fixed mask, for dynamic mode we show the current
+    iteration mask so in-progress frames reflect changing constraints.
+    """
+    try:
+        n = len(coords)
+        mask_iteration = None if mode != "dynamic" else int(iteration or 0)
+        pm = dynamic_env.get_penalty_matrix(n, iteration=mask_iteration)
+        if pm is None:
+            return
+        first = True
+        for i in range(n):
+            for j in range(i + 1, n):
+                if float(pm[i, j]) <= 0.0:
+                    continue
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(coords[i, 0]), float(coords[j, 0])],
+                        y=[float(coords[i, 1]), float(coords[j, 1])],
+                        mode="lines",
+                        line=dict(width=1, color="#ff4d4f", dash="dash"),
+                        opacity=0.7,
+                        name="Blocked edge" if first else None,
+                        showlegend=bool(first),
+                        hovertemplate=f"Blocked edge: {i} ↔ {j}<extra></extra>",
+                    )
+                )
+                first = False
+    except Exception:
+        return
+
+
+def _dynamic_metrics_from_history(history: list[float] | None, exact_length: float | None) -> dict:
+    values = [float(v) for v in (history or [])]
+    if not values:
+        return {
+            "avg_route_length": None,
+            "route_length_std": None,
+            "final_route_length": None,
+            "avg_optimality_gap_pct": None,
+            "gap_variation_pct": None,
+        }
+
+    avg_len = float(np.mean(values))
+    std_len = float(np.std(values))
+    final_len = float(values[-1])
+
+    avg_gap = None
+    gap_std = None
+    if exact_length is not None and float(exact_length) > 0.0:
+        target = float(exact_length)
+        gaps = [((v - target) / target) * 100.0 for v in values]
+        avg_gap = float(np.mean(gaps))
+        gap_std = float(np.std(gaps))
+
+    return {
+        "avg_route_length": avg_len,
+        "route_length_std": std_len,
+        "final_route_length": final_len,
+        "avg_optimality_gap_pct": avg_gap,
+        "gap_variation_pct": gap_std,
+    }
+
+
 def _build_run_insights(run_data: dict) -> list[str]:
+    if run_data.get("mode") == "dynamic":
+        insights = []
+        avg_gap = run_data.get("avg_optimality_gap_pct")
+        gap_var = run_data.get("gap_variation_pct")
+        avg_len = run_data.get("avg_route_length")
+        len_var = run_data.get("route_length_std")
+        if avg_gap is None:
+            insights.append("Average optimality gap is unavailable because an exact baseline was not computed.")
+        else:
+            insights.append(f"Average optimality gap across all iterations: {avg_gap:.3f}%.")
+        if gap_var is not None:
+            insights.append(f"Gap variation across iterations (std dev): {gap_var:.3f} percentage points.")
+        if avg_len is not None:
+            insights.append(f"Average route length during dynamic adaptation: {avg_len:.3f}.")
+        if len_var is not None:
+            insights.append(f"Route-length variation across iterations (std dev): {len_var:.3f}.")
+        insights.append("Dynamic TSP disables convergence/early-stop checks by design, so the algorithm runs the full iteration budget.")
+        return insights
+
     insights = []
     gap = run_data.get("optimality_gap_pct")
     if gap is None:
@@ -232,28 +318,7 @@ map_col, right_col = st.columns([1.15, 2.35])
 with map_col:
     fig = go.Figure()
     _base_city_trace(fig)
-    # draw blocked/inaccessible edges (from dynamic_env)
-    try:
-        n = len(coords)
-        pm = dynamic_env.get_penalty_matrix(n, iteration=None)
-        if pm is not None:
-            # draw each blocked undirected edge once
-            for i in range(n):
-                for j in range(i + 1, n):
-                    if pm[i, j] > 0:
-                        fig.add_trace(
-                            go.Scatter(
-                                x=[float(coords[i, 0]), float(coords[j, 0])],
-                                y=[float(coords[i, 1]), float(coords[j, 1])],
-                                mode="lines",
-                                line=dict(width=1, color="#ff4d4f", dash="dash"),
-                                opacity=0.65,
-                                showlegend=False,
-                                hoverinfo='none',
-                            )
-                        )
-    except Exception:
-        pass
+    _add_blocked_edges_overlay(fig, mode=tsp_mode, iteration=0 if tsp_mode == "dynamic" else None)
     if exact_result and exact_result.get("tour"):
         x_opt, y_opt = _tour_xy(exact_result["tour"])
         fig.add_trace(
@@ -505,6 +570,7 @@ with right_col:
                     return
                 fx = go.Figure()
                 _base_city_trace(fx)
+                _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
                 x_aco, y_aco = _tour_xy(best_tour)
                 fx.add_trace(
                     go.Scatter(
@@ -568,6 +634,7 @@ with right_col:
                 iter_text = f" | Converged at iteration: {convergence_iteration}"
 
             run_summary = {
+                "mode": tsp_mode,
                 "model": "ACO",
                 "best_len": float(best_len),
                 "optimality_gap_pct": gap_value,
@@ -582,6 +649,22 @@ with right_col:
                 "iterations": int(st.session_state["aco_iterations"]),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
+            if tsp_mode == "dynamic":
+                dyn = _dynamic_metrics_from_history(
+                    history if isinstance(history, list) else [],
+                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                )
+                run_summary.update(
+                    {
+                        "best_found_iteration": None,
+                        "convergence_iteration": None,
+                        "convergence_time_s": None,
+                        "optimality_gap_pct": None,
+                        "stopped_early": False,
+                        **dyn,
+                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                    }
+                )
             st.session_state["last_run"] = run_summary
             # cleanup any applied penalties
             try:
@@ -607,6 +690,7 @@ with right_col:
                     return
                 fx = go.Figure()
                 _base_city_trace(fx)
+                _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
                 x_abc, y_abc = _tour_xy(best_tour)
                 fx.add_trace(
                     go.Scatter(
@@ -670,6 +754,7 @@ with right_col:
                 iter_text = f" | Converged at iteration: {convergence_iteration}"
 
             run_summary = {
+                "mode": tsp_mode,
                 "model": "ABC",
                 "best_len": float(best_len),
                 "optimality_gap_pct": gap_value,
@@ -684,6 +769,22 @@ with right_col:
                 "iterations": int(st.session_state.get("abc_iterations", 200)),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
+            if tsp_mode == "dynamic":
+                dyn = _dynamic_metrics_from_history(
+                    history if isinstance(history, list) else [],
+                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                )
+                run_summary.update(
+                    {
+                        "best_found_iteration": None,
+                        "convergence_iteration": None,
+                        "convergence_time_s": None,
+                        "optimality_gap_pct": None,
+                        "stopped_early": False,
+                        **dyn,
+                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                    }
+                )
             st.session_state["last_run"] = run_summary
             try:
                 clear_edge_penalties()
@@ -711,6 +812,7 @@ with right_col:
                     return
                 fx = go.Figure()
                 _base_city_trace(fx)
+                _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
                 x_ga, y_ga = _tour_xy(best_tour)
                 fx.add_trace(
                     go.Scatter(
@@ -774,6 +876,7 @@ with right_col:
                 iter_text = f" | Converged at iteration: {convergence_iteration}"
 
             run_summary = {
+                "mode": tsp_mode,
                 "model": "GA",
                 "best_len": float(best_len),
                 "optimality_gap_pct": gap_value,
@@ -788,6 +891,22 @@ with right_col:
                 "iterations": int(st.session_state.get("ga_iterations", 200)),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
+            if tsp_mode == "dynamic":
+                dyn = _dynamic_metrics_from_history(
+                    history if isinstance(history, list) else [],
+                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                )
+                run_summary.update(
+                    {
+                        "best_found_iteration": None,
+                        "convergence_iteration": None,
+                        "convergence_time_s": None,
+                        "optimality_gap_pct": None,
+                        "stopped_early": False,
+                        **dyn,
+                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                    }
+                )
             st.session_state["last_run"] = run_summary
             try:
                 clear_edge_penalties()
@@ -814,6 +933,7 @@ with right_col:
                     return
                 fx = go.Figure()
                 _base_city_trace(fx)
+                _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
                 x_pso, y_pso = _tour_xy(best_tour)
                 fx.add_trace(
                     go.Scatter(
@@ -877,6 +997,7 @@ with right_col:
                 iter_text = f" | Converged at iteration: {convergence_iteration}"
 
             run_summary = {
+                "mode": tsp_mode,
                 "model": "PSO",
                 "best_len": float(best_len),
                 "optimality_gap_pct": gap_value,
@@ -891,6 +1012,22 @@ with right_col:
                 "iterations": int(st.session_state.get("pso_iterations", 200)),
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
+            if tsp_mode == "dynamic":
+                dyn = _dynamic_metrics_from_history(
+                    history if isinstance(history, list) else [],
+                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                )
+                run_summary.update(
+                    {
+                        "best_found_iteration": None,
+                        "convergence_iteration": None,
+                        "convergence_time_s": None,
+                        "optimality_gap_pct": None,
+                        "stopped_early": False,
+                        **dyn,
+                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                    }
+                )
             st.session_state["last_run"] = run_summary
             try:
                 clear_edge_penalties()
@@ -904,29 +1041,58 @@ with right_col:
     if run_data:
         st.markdown("### Latest Run Summary")
         st.success(run_data.get("note", "Run complete."))
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Model", run_data["model"])
-        m2.metric("Best route length", f"{run_data['best_len']:.3f}")
-        if run_data.get("optimality_gap_pct") is None:
-            m3.metric("Optimality gap", "N/A")
-        else:
-            m3.metric("Optimality gap", f"{run_data['optimality_gap_pct']:.3f}%")
-        m4.metric("Convergence time", f"{run_data['convergence_time_s']:.4f} s")
+        if run_data.get("mode") == "dynamic":
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Model", run_data["model"])
+            if run_data.get("avg_route_length") is None:
+                m2.metric("Avg route length", "N/A")
+            else:
+                m2.metric("Avg route length", f"{run_data['avg_route_length']:.3f}")
+            if run_data.get("avg_optimality_gap_pct") is None:
+                m3.metric("Avg optimality gap", "N/A")
+            else:
+                m3.metric("Avg optimality gap", f"{run_data['avg_optimality_gap_pct']:.3f}%")
+            if run_data.get("gap_variation_pct") is None:
+                m4.metric("Gap variation (std)", "N/A")
+            else:
+                m4.metric("Gap variation (std)", f"{run_data['gap_variation_pct']:.3f} pp")
 
-        m5, m6, m7 = st.columns(3)
-        m5.metric("Best found iteration", f"{run_data['best_found_iteration']}")
-        m6.metric("Evals to convergence", f"{run_data['objective_evals_to_convergence']:,}")
-        m7.metric("Total evals", f"{run_data['objective_evals_total']:,}")
+            m5, m6, m7 = st.columns(3)
+            if run_data.get("final_route_length") is None:
+                m5.metric("Final route length", "N/A")
+            else:
+                m5.metric("Final route length", f"{run_data['final_route_length']:.3f}")
+            m6.metric("Total evals", f"{run_data['objective_evals_total']:,}")
+            m7.metric("Iterations executed", f"{run_data['iterations_executed']}")
 
-        st.markdown("### Stop Condition")
-        if run_data.get("stopped_early"):
-            st.success(
-                f"Stopped early after {run_data['iterations_executed']} iterations because the model matched the exact route length within tolerance."
-            )
-        else:
+            st.markdown("### Stop Condition")
             st.info(
-                f"No exact match was reached, so the model used the full budget of {run_data['iterations']} iterations."
+                f"Dynamic mode disables convergence checks; this run intentionally used the full budget of {run_data['iterations']} iterations."
             )
+        else:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Model", run_data["model"])
+            m2.metric("Best route length", f"{run_data['best_len']:.3f}")
+            if run_data.get("optimality_gap_pct") is None:
+                m3.metric("Optimality gap", "N/A")
+            else:
+                m3.metric("Optimality gap", f"{run_data['optimality_gap_pct']:.3f}%")
+            m4.metric("Convergence time", f"{run_data['convergence_time_s']:.4f} s")
+
+            m5, m6, m7 = st.columns(3)
+            m5.metric("Best found iteration", f"{run_data['best_found_iteration']}")
+            m6.metric("Evals to convergence", f"{run_data['objective_evals_to_convergence']:,}")
+            m7.metric("Total evals", f"{run_data['objective_evals_total']:,}")
+
+            st.markdown("### Stop Condition")
+            if run_data.get("stopped_early"):
+                st.success(
+                    f"Stopped early after {run_data['iterations_executed']} iterations because the model matched the exact route length within tolerance."
+                )
+            else:
+                st.info(
+                    f"No exact match was reached, so the model used the full budget of {run_data['iterations']} iterations."
+                )
 
         st.markdown("### Insights")
         insights = _build_run_insights(run_data)

@@ -16,8 +16,6 @@ from src.comparison import (
     AVAILABLE_ALGORITHMS,
     build_insights,
     build_model_summary,
-    format_model_names,
-    format_model_names_for_max,
     parse_int_list,
     run_comparison_batch,
 )
@@ -253,12 +251,22 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
     if not summary_rows:
         st.info("Run a batch to generate summary cards.")
         return
-    best_time = format_model_names(summary_rows, "avg_convergence_time_s")
-    best_gap = format_model_names(summary_rows, "avg_gap_pct")
-    best_evals = format_model_names(summary_rows, "avg_evals_to_convergence")
-    best_hits = format_model_names_for_max(summary_rows, "optimal_hits")
-    best_runtime = format_model_names(summary_rows, "avg_run_time_s")
-    best_match_rate = format_model_names_for_max(summary_rows, "exact_match_rate")
+    def _best_models_min(key: str) -> str:
+        best_value = min(float(row[key]) for row in summary_rows)
+        winners = [row["model"] for row in summary_rows if abs(float(row[key]) - best_value) <= 1e-12]
+        return ", ".join(winners)
+
+    def _best_models_max(key: str) -> str:
+        best_value = max(float(row[key]) for row in summary_rows)
+        winners = [row["model"] for row in summary_rows if abs(float(row[key]) - best_value) <= 1e-12]
+        return ", ".join(winners)
+
+    best_time = _best_models_min("avg_convergence_time_s")
+    best_gap = _best_models_min("avg_gap_pct")
+    best_evals = _best_models_min("avg_evals_to_convergence")
+    best_hits = _best_models_max("optimal_hits")
+    best_runtime = _best_models_min("avg_run_time_s")
+    best_match_rate = _best_models_max("exact_match_rate")
     total_runs = sum(row["runs"] for row in summary_rows)
     best_gap_value = min(summary_rows, key=lambda row: row["avg_gap_pct"])["avg_gap_pct"]
     best_time_value = min(summary_rows, key=lambda row: row["avg_convergence_time_s"])["avg_convergence_time_s"]

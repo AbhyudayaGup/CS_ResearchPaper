@@ -597,6 +597,7 @@ def build_model_summary(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         avg_gap = sum((row["optimality_gap_pct"] or 0.0) for row in model_rows) / len(model_rows)
         avg_time = sum(float(row["convergence_time_s"] or 0.0) for row in model_rows) / len(model_rows)
         avg_evals = sum(float(row["objective_evals_to_convergence"] or 0.0) for row in model_rows) / len(model_rows)
+        avg_run_time = sum(float(row["run_time_s"] or 0.0) for row in model_rows) / len(model_rows)
         optimal_hits = sum(1 for row in model_rows if row.get("optimal_match"))
         summaries.append(
             {
@@ -604,11 +605,37 @@ def build_model_summary(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "avg_gap_pct": avg_gap,
                 "avg_convergence_time_s": avg_time,
                 "avg_evals_to_convergence": avg_evals,
+                "avg_run_time_s": avg_run_time,
                 "optimal_hits": optimal_hits,
+                "exact_match_rate": optimal_hits / len(model_rows),
                 "runs": len(model_rows),
             }
         )
     return summaries
+
+
+def models_with_min_value(rows: Sequence[Dict[str, Any]], key: str, tolerance: float = 1e-12) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    best_value = min(float(row[key]) for row in rows)
+    return [row for row in rows if abs(float(row[key]) - best_value) <= float(tolerance)]
+
+
+def models_with_max_value(rows: Sequence[Dict[str, Any]], key: str, tolerance: float = 1e-12) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    best_value = max(float(row[key]) for row in rows)
+    return [row for row in rows if abs(float(row[key]) - best_value) <= float(tolerance)]
+
+
+def format_model_names(rows: Sequence[Dict[str, Any]], key: str, tolerance: float = 1e-12) -> str:
+    winners = models_with_min_value(rows, key, tolerance=tolerance)
+    return ", ".join(row["model"] for row in winners)
+
+
+def format_model_names_for_max(rows: Sequence[Dict[str, Any]], key: str, tolerance: float = 1e-12) -> str:
+    winners = models_with_max_value(rows, key, tolerance=tolerance)
+    return ", ".join(row["model"] for row in winners)
 
 
 def build_insights(rows: Sequence[Dict[str, Any]]) -> List[str]:
@@ -620,10 +647,12 @@ def build_insights(rows: Sequence[Dict[str, Any]]) -> List[str]:
     if not summaries:
         return ["No comparable model summaries were produced."]
 
-    by_gap = min(summaries, key=lambda row: row["avg_gap_pct"])
-    by_time = min(summaries, key=lambda row: row["avg_convergence_time_s"])
-    by_evals = min(summaries, key=lambda row: row["avg_evals_to_convergence"])
-    by_hits = max(summaries, key=lambda row: row["optimal_hits"])
+    by_gap = models_with_min_value(summaries, "avg_gap_pct")
+    by_time = models_with_min_value(summaries, "avg_convergence_time_s")
+    by_evals = models_with_min_value(summaries, "avg_evals_to_convergence")
+    by_hits = models_with_max_value(summaries, "optimal_hits")
+    by_runtime = models_with_min_value(summaries, "avg_run_time_s")
+    by_match_rate = models_with_max_value(summaries, "exact_match_rate")
 
     max_gap = max(summary["avg_gap_pct"] for summary in summaries)
     min_gap = min(summary["avg_gap_pct"] for summary in summaries)
@@ -636,19 +665,21 @@ def build_insights(rows: Sequence[Dict[str, Any]]) -> List[str]:
         ]
 
     insights = [
-        f"Best route quality overall: {by_gap['model']} with an average optimality gap of {by_gap['avg_gap_pct']:.3f}%. That means it produced the closest routes to the exact baseline across the selected scenarios.",
-        f"Fastest convergence overall: {by_time['model']} at {by_time['avg_convergence_time_s']:.4f}s on average. It is better where quick usable answers matter more than squeezing out the last bit of route quality.",
-        f"Lowest compute effort to convergence: {by_evals['model']} with {by_evals['avg_evals_to_convergence']:.0f} objective evaluations on average. Fewer evaluations usually means less search work before the model settles.",
-        f"Most exact matches: {by_hits['model']} hit the exact baseline {by_hits['optimal_hits']} times out of {by_hits['runs']} runs. That is the strongest signal of route quality consistency.",
+        f"Best route quality overall: {', '.join(row['model'] for row in by_gap)} with an average optimality gap of {by_gap[0]['avg_gap_pct']:.3f}%. That means it produced the closest routes to the exact baseline across the selected scenarios.",
+        f"Fastest convergence overall: {', '.join(row['model'] for row in by_time)} at {by_time[0]['avg_convergence_time_s']:.4f}s on average. It is better where quick usable answers matter more than squeezing out the last bit of route quality.",
+        f"Lowest compute effort to convergence: {', '.join(row['model'] for row in by_evals)} with {by_evals[0]['avg_evals_to_convergence']:.0f} objective evaluations on average. Fewer evaluations usually means less search work before the model settles.",
+        f"Most exact matches: {', '.join(row['model'] for row in by_hits)} hit the exact baseline {by_hits[0]['optimal_hits']} times out of {by_hits[0]['runs']} runs. That is the strongest signal of route quality consistency.",
+        f"Lowest total runtime: {', '.join(row['model'] for row in by_runtime)} with {by_runtime[0]['avg_run_time_s']:.4f}s on average. This captures end-to-end wall-clock cost, not just convergence timing.",
+        f"Highest exact-match rate: {', '.join(row['model'] for row in by_match_rate)} at {by_match_rate[0]['exact_match_rate'] * 100.0:.1f}% of runs. This is the cleanest measure of how often a model lands exactly on the baseline.",
     ]
 
-    if by_gap["model"] != by_time["model"]:
+    if {row['model'] for row in by_gap} != {row['model'] for row in by_time}:
         insights.append(
             f"The quality leader and speed leader are different, which is normal: the quality-focused model likely spends more work refining tours, while the speed-focused model prioritizes faster movement through the search space."
         )
     else:
         insights.append(
-            f"{by_gap['model']} wins on both quality and speed here, so it is the strongest choice for this particular problem setup among the models you selected."
+            f"{by_gap[0]['model']} wins on both quality and speed here, so it is the strongest choice for this particular problem setup among the models you selected."
         )
 
     if max_gap - min_gap > 1.0:

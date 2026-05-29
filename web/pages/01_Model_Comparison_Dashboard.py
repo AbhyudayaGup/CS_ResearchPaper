@@ -12,7 +12,15 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.comparison import AVAILABLE_ALGORITHMS, build_insights, build_model_summary, parse_int_list, run_comparison_batch
+from src.comparison import (
+    AVAILABLE_ALGORITHMS,
+    build_insights,
+    build_model_summary,
+    format_model_names,
+    format_model_names_for_max,
+    parse_int_list,
+    run_comparison_batch,
+)
 
 
 st.set_page_config(page_title="Model Comparison Dashboard", layout="wide")
@@ -67,7 +75,7 @@ def _inject_css() -> None:
         }
         .metric-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 12px;
         }
         .metric-card {
@@ -245,24 +253,35 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
     if not summary_rows:
         st.info("Run a batch to generate summary cards.")
         return
-    best_time = min(summary_rows, key=lambda row: row["avg_convergence_time_s"])
-    best_gap = min(summary_rows, key=lambda row: row["avg_gap_pct"])
-    best_evals = min(summary_rows, key=lambda row: row["avg_evals_to_convergence"])
-    best_hits = max(summary_rows, key=lambda row: row["optimal_hits"])
+    best_time = format_model_names(summary_rows, "avg_convergence_time_s")
+    best_gap = format_model_names(summary_rows, "avg_gap_pct")
+    best_evals = format_model_names(summary_rows, "avg_evals_to_convergence")
+    best_hits = format_model_names_for_max(summary_rows, "optimal_hits")
+    best_runtime = format_model_names(summary_rows, "avg_run_time_s")
+    best_match_rate = format_model_names_for_max(summary_rows, "exact_match_rate")
     total_runs = sum(row["runs"] for row in summary_rows)
+    best_gap_value = min(summary_rows, key=lambda row: row["avg_gap_pct"])["avg_gap_pct"]
+    best_time_value = min(summary_rows, key=lambda row: row["avg_convergence_time_s"])["avg_convergence_time_s"]
+    best_evals_value = min(summary_rows, key=lambda row: row["avg_evals_to_convergence"])["avg_evals_to_convergence"]
+    best_runtime_value = min(summary_rows, key=lambda row: row["avg_run_time_s"])["avg_run_time_s"]
+    best_match_rate_value = max(summary_rows, key=lambda row: row["exact_match_rate"])["exact_match_rate"]
     st.markdown(
         f"""
         <div class="metric-grid">
-            <div class="metric-card"><div class="metric-label">Fastest Average Convergence</div><div class="metric-value">{escape(best_time['model'])}</div><div class="metric-note">{best_time['avg_convergence_time_s']:.4f} s</div></div>
-            <div class="metric-card"><div class="metric-label">Best Average Quality</div><div class="metric-value">{escape(best_gap['model'])}</div><div class="metric-note">{best_gap['avg_gap_pct']:.3f}% gap</div></div>
-            <div class="metric-card"><div class="metric-label">Lowest Eval Effort</div><div class="metric-value">{escape(best_evals['model'])}</div><div class="metric-note">{best_evals['avg_evals_to_convergence']:.0f} evals</div></div>
+            <div class="metric-card"><div class="metric-label">Best Average Quality</div><div class="metric-value">{escape(best_gap)}</div><div class="metric-note">{best_gap_value:.3f}% gap</div></div>
+            <div class="metric-card"><div class="metric-label">Fastest Average Convergence</div><div class="metric-value">{escape(best_time)}</div><div class="metric-note">{best_time_value:.4f} s</div></div>
+            <div class="metric-card"><div class="metric-label">Lowest Eval Effort</div><div class="metric-value">{escape(best_evals)}</div><div class="metric-note">{best_evals_value:.0f} evals</div></div>
+            <div class="metric-card"><div class="metric-label">Lowest Total Runtime</div><div class="metric-value">{escape(best_runtime)}</div><div class="metric-note">{best_runtime_value:.4f} s</div></div>
+            <div class="metric-card"><div class="metric-label">Highest Exact-Match Rate</div><div class="metric-value">{escape(best_match_rate)}</div><div class="metric-note">{best_match_rate_value * 100.0:.1f}% of runs</div></div>
+            <div class="metric-card"><div class="metric-label">Most Exact Matches</div><div class="metric-value">{escape(best_hits)}</div><div class="metric-note">Across the selected scenarios</div></div>
             <div class="metric-card"><div class="metric-label">Total Completed Runs</div><div class="metric-value">{total_runs}</div><div class="metric-note">Across all selected configurations</div></div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    top_hits = max(summary_rows, key=lambda row: row["optimal_hits"])
     st.caption(
-        f"Most exact matches: {best_hits['model']} ({best_hits['optimal_hits']} / {best_hits['runs']})."
+        f"Most exact matches: {best_hits} ({top_hits['optimal_hits']} / {top_hits['runs']})."
     )
 
 

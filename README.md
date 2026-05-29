@@ -9,7 +9,7 @@ Current UI behavior:
 - Right panel includes an algorithm dropdown with implemented `ACO`, `ABC`, `GA`, and `PSO`.
 - After each model run, the app shows comparison cards:
 	- `Convergence time (s)`
-	- `Evals to convergence`
+	- `Evals to convergence`fo
 	- `Total objective evals`
 - A separate `Model Comparison Dashboard` page is available from the Streamlit sidebar for batch benchmarking across many city sizes and configurations.
 - CSV logging has been removed; comparison results stay in-memory and render directly in the UI.

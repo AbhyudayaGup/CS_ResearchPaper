@@ -16,6 +16,8 @@ from src.exact_solver import solve_tsp_exact
 from src.ga import GeneticAlgorithm
 from src.utils import generate_cities
 from src.pso import ParticleSwarm
+from src import dynamic_env
+from src.aco import clear_edge_penalties
 
 
 st.set_page_config(layout="wide", page_title="TSP Visual Lab")
@@ -134,16 +136,26 @@ num_cities = st.sidebar.number_input("Number of cities", min_value=4, max_value=
 instance_seed = st.sidebar.number_input("Instance seed (0=random)", min_value=0, value=0, step=1)
 clustered = st.sidebar.checkbox("Clustered city layout", value=False)
 exact_timeout = st.sidebar.slider("Exact solver time limit (seconds)", min_value=10, max_value=300, value=90)
+tsp_mode = st.sidebar.selectbox("TSP type", ["standard", "noisy", "dynamic"], index=0, help="Choose standard, noisy (some edges inaccessible), or dynamic (edges change during run)")
+
+# Noisy / dynamic params
+tsp_blocked_fraction = st.sidebar.slider("Blocked edge fraction", min_value=0.0, max_value=0.5, value=0.05, step=0.01, help="Fraction of undirected edges to mark as inaccessible (penalized)")
+tsp_blocked_count = st.sidebar.number_input("Blocked edge count (0 = use fraction)", min_value=0, value=0, step=1)
+tsp_penalty = st.sidebar.number_input("Penalty for blocked edge", min_value=1.0, value=1e6, format="%.0f", help="Large number added to distance for blocked edges")
+tsp_mode_seed = st.sidebar.number_input("Noise seed (0=random)", min_value=0, value=0, step=1)
 
 if st.sidebar.button("Generate New TSP Instance", type="primary"):
     seed = None if instance_seed == 0 else int(instance_seed)
     st.session_state["coords"] = generate_cities(int(num_cities), seed=seed, clustered=clustered)
     st.session_state["needs_exact"] = True
+    # set dynamic/noisy params on generation
+    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed))
 
 if st.session_state["coords"] is None:
     seed = None if instance_seed == 0 else int(instance_seed)
     st.session_state["coords"] = generate_cities(int(num_cities), seed=seed, clustered=clustered)
     st.session_state["needs_exact"] = True
+    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed))
 
 coords = st.session_state["coords"]
 
@@ -220,6 +232,28 @@ map_col, right_col = st.columns([1.15, 2.35])
 with map_col:
     fig = go.Figure()
     _base_city_trace(fig)
+    # draw blocked/inaccessible edges (from dynamic_env)
+    try:
+        n = len(coords)
+        pm = dynamic_env.get_penalty_matrix(n, iteration=None)
+        if pm is not None:
+            # draw each blocked undirected edge once
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if pm[i, j] > 0:
+                        fig.add_trace(
+                            go.Scatter(
+                                x=[float(coords[i, 0]), float(coords[j, 0])],
+                                y=[float(coords[i, 1]), float(coords[j, 1])],
+                                mode="lines",
+                                line=dict(width=1, color="#ff4d4f", dash="dash"),
+                                opacity=0.65,
+                                showlegend=False,
+                                hoverinfo='none',
+                            )
+                        )
+    except Exception:
+        pass
     if exact_result and exact_result.get("tour"):
         x_opt, y_opt = _tour_xy(exact_result["tour"])
         fig.add_trace(
@@ -448,6 +482,8 @@ with right_col:
     chart_placeholder = st.empty()
 
     if run_clicked:
+        # ensure dynamic_env parameters reflect UI
+        dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed))
         if algorithm == "ACO (Ant Colony Optimization)":
             ac_seed = None if int(st.session_state["aco_seed"]) == 0 else int(st.session_state["aco_seed"])
             ac = AntColony(
@@ -547,6 +583,11 @@ with right_col:
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
             st.session_state["last_run"] = run_summary
+            # cleanup any applied penalties
+            try:
+                clear_edge_penalties()
+            except Exception:
+                pass
 
         elif algorithm == "Artificial Bee Colony":
             abc_seed = None if int(st.session_state.get("abc_seed", 0)) == 0 else int(st.session_state.get("abc_seed", 0))
@@ -644,6 +685,10 @@ with right_col:
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
             st.session_state["last_run"] = run_summary
+            try:
+                clear_edge_penalties()
+            except Exception:
+                pass
 
         elif algorithm == "Genetic Algorithm":
             ga_seed = None if int(st.session_state.get("ga_seed", 0)) == 0 else int(st.session_state.get("ga_seed", 0))
@@ -744,6 +789,10 @@ with right_col:
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
             st.session_state["last_run"] = run_summary
+            try:
+                clear_edge_penalties()
+            except Exception:
+                pass
 
         elif algorithm == "Particle Swarm Optimization":
             pso_seed = None if int(st.session_state.get("pso_seed", 0)) == 0 else int(st.session_state.get("pso_seed", 0))
@@ -843,6 +892,10 @@ with right_col:
                 "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
             }
             st.session_state["last_run"] = run_summary
+            try:
+                clear_edge_penalties()
+            except Exception:
+                pass
 
         else:
             st.info("Selected algorithm is not available.")

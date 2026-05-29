@@ -5,7 +5,8 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .aco import two_opt, tour_length
+from .aco import two_opt, tour_length, apply_edge_penalties
+from . import dynamic_env
 
 
 def _random_tour(rng: np.random.Generator, n: int) -> list[int]:
@@ -75,6 +76,12 @@ class ArtificialBeeColony:
         t0 = time.perf_counter()
 
         def reached_target(current_best: float) -> bool:
+            # disable early stopping for truly dynamic environments
+            try:
+                if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                    return False
+            except Exception:
+                pass
             if target_length is None:
                 return False
             target = float(target_length)
@@ -90,6 +97,13 @@ class ArtificialBeeColony:
         food_sources = []
         source_lengths = []
         trials = np.zeros(self.n_food_sources, dtype=int)
+
+        # apply initial penalty matrix (noisy) if present
+        try:
+            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
+            apply_edge_penalties(pm)
+        except Exception:
+            pass
 
         for _ in range(self.n_food_sources):
             tour = _random_tour(self.rng, self.n)
@@ -111,6 +125,12 @@ class ArtificialBeeColony:
             stopped_early = True
         else:
             for it in range(self.n_iterations):
+                # update penalty matrix per-iteration for dynamic mode
+                try:
+                    pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
+                    apply_edge_penalties(pm)
+                except Exception:
+                    pass
                 lengths_arr = np.asarray(source_lengths, dtype=float)
                 fitness = self._fitness(lengths_arr)
                 total_fitness = float(fitness.sum())

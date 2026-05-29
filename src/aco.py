@@ -1,5 +1,6 @@
 import numpy as np
 from .utils import distance_matrix
+from . import dynamic_env
 import math
 import time
 
@@ -39,8 +40,32 @@ def tour_length(tour, coords):
     for i in range(n):
         a = coords[tour[i]]
         b = coords[tour[(i + 1) % n]]
-        total += math.hypot(a[0] - b[0], a[1] - b[1])
+        base = math.hypot(a[0] - b[0], a[1] - b[1])
+        # apply optional edge penalties from dynamic_env (set by UI)
+        try:
+            penalty = 0.0
+            if hasattr(tour_length, "_penalty_matrix") and tour_length._penalty_matrix is not None:
+                pm = tour_length._penalty_matrix
+                penalty = float(pm[int(tour[i]), int(tour[(i + 1) % n])])
+            total += base + penalty
+        except Exception:
+            total += base
     return total
+
+
+def apply_edge_penalties(matrix):
+    # attach penalty matrix to tour_length function for algorithms to use
+    try:
+        tour_length._penalty_matrix = None if matrix is None else matrix.astype(float)
+    except Exception:
+        tour_length._penalty_matrix = None
+
+
+def clear_edge_penalties():
+    try:
+        tour_length._penalty_matrix = None
+    except Exception:
+        pass
 
 
 class AntColony:
@@ -131,6 +156,14 @@ class AntColony:
         convergence_time_s = None
 
         def reached_target(current_best: float) -> bool:
+            # In dynamic mode we never consider convergence/early stop because
+            # the environment changes during the run.
+            try:
+                from . import dynamic_env
+                if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                    return False
+            except Exception:
+                pass
             if target_length is None:
                 return False
             target = float(target_length)
@@ -143,7 +176,20 @@ class AntColony:
                 return True
             return gap_pct <= float(target_gap_pct)
 
+        # initialize penalty matrix for iteration 0
+        try:
+            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
+            apply_edge_penalties(pm)
+        except Exception:
+            pass
+
         for it in range(self.n_iterations):
+            # update penalty matrix for this iteration (dynamic/noisy support)
+            try:
+                pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
+                apply_edge_penalties(pm)
+            except Exception:
+                pass
             tours, lengths, eval_count = self._construct_solutions()
             objective_evals_total += eval_count
             # optional local search

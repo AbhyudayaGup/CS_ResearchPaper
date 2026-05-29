@@ -2,7 +2,8 @@ import numpy as np
 import math
 import time
 from .utils import distance_matrix
-from .aco import two_opt, tour_length
+from .aco import two_opt, tour_length, apply_edge_penalties
+from . import dynamic_env
 
 
 class ParticleSwarm:
@@ -60,6 +61,12 @@ class ParticleSwarm:
         convergence_time_s = None
 
         def reached_target(current_best: float) -> bool:
+            # dynamic environments never converge to a stable target
+            try:
+                if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                    return False
+            except Exception:
+                pass
             if target_length is None:
                 return False
             target = float(target_length)
@@ -71,6 +78,13 @@ class ParticleSwarm:
             if abs(gap_pct) <= tolerance:
                 return True
             return gap_pct <= float(target_gap_pct)
+
+        # apply initial penalty matrix (noisy) if present
+        try:
+            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
+            apply_edge_penalties(pm)
+        except Exception:
+            pass
 
         # evaluate initial particles
         for i in range(self.n_particles):
@@ -92,6 +106,12 @@ class ParticleSwarm:
 
         if not stopped_early:
             for it in range(self.n_iterations):
+                # update penalty matrix per-iteration for dynamic mode
+                try:
+                    pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
+                    apply_edge_penalties(pm)
+                except Exception:
+                    pass
                 for i in range(self.n_particles):
                     r1 = self.rng.random(self.n)
                     r2 = self.rng.random(self.n)

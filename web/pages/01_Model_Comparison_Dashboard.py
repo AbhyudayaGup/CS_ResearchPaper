@@ -227,14 +227,17 @@ def _inject_css() -> None:
 
 
 def _parse_models() -> list[str]:
-    labels = [spec.label for spec in AVAILABLE_ALGORITHMS]
-    default = [spec.label for spec in AVAILABLE_ALGORITHMS if spec.runnable]
-    selected = st.multiselect(
-        "Models to compare",
-        options=labels,
-        default=default,
-        format_func=lambda label: f"{label} ({'ready' if next(spec for spec in AVAILABLE_ALGORITHMS if spec.label == label).runnable else 'coming soon'})",
-    )
+    st.markdown("### Models to compare")
+    st.caption("Each model is shown explicitly so the full set stays visible even when all are selected.")
+    selected: list[str] = []
+    for row_index in range(0, len(AVAILABLE_ALGORITHMS), 2):
+        columns = st.columns(2)
+        for column, spec in zip(columns, AVAILABLE_ALGORITHMS[row_index : row_index + 2]):
+            with column:
+                label = f"{spec.label} ({'ready' if spec.runnable else 'coming soon'})"
+                checked = st.checkbox(label, value=spec.runnable, key=f"model_{spec.label.lower()}_selected")
+                if checked:
+                    selected.append(spec.label)
     return selected
 
 

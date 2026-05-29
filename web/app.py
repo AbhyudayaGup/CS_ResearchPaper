@@ -40,15 +40,12 @@ def _run_optimizer_with_optional_stats(optimizer, callback, target_length=None):
 
 
 def _algorithm_short_name(algorithm: str) -> str:
-    if algorithm == "ACO (Ant Colony Optimization)":
-        return "ACO"
-    if algorithm == "Artificial Bee Colony":
-        return "ABC"
-    if algorithm == "Genetic Algorithm":
-        return "GA"
-    if algorithm == "Particle Swarm Optimization":
-        return "PSO"
-    return "Model"
+    return {
+        "ACO (Ant Colony Optimization)": "ACO",
+        "Artificial Bee Colony": "ABC",
+        "Genetic Algorithm": "GA",
+        "Particle Swarm Optimization": "PSO",
+    }.get(algorithm, "Model")
 
 
 def _fallback_stats(model: str, history, best_len, best_found_iter, convergence_iteration, elapsed_s, population_size):
@@ -252,14 +249,15 @@ with map_col:
 
 with right_col:
     st.subheader("Algorithm Workspace")
+    algorithm_labels = [
+        "ACO (Ant Colony Optimization)",
+        "Artificial Bee Colony",
+        "Genetic Algorithm",
+        "Particle Swarm Optimization",
+    ]
     algorithm = st.selectbox(
         "Choose algorithm",
-        [
-            "ACO (Ant Colony Optimization)",
-            "Artificial Bee Colony",
-            "Genetic Algorithm",
-            "Particle Swarm Optimization",
-        ],
+        algorithm_labels,
         index=0,
     )
 

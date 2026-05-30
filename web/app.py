@@ -17,8 +17,8 @@ from src.exact_solver import solve_tsp_exact
 from src.ga import GeneticAlgorithm
 from src.utils import generate_cities
 from src.pso import ParticleSwarm
-from src import dynamic_env
-from src.aco import clear_edge_penalties
+import importlib
+dynamic_env = importlib.import_module("src.dynamic_env")
 
 
 st.set_page_config(layout="wide", page_title="TSP Visual Lab")
@@ -142,28 +142,30 @@ tsp_mode = st.sidebar.selectbox("TSP type", ["standard", "noisy", "dynamic"], in
 # Noisy / dynamic params
 tsp_blocked_fraction = st.sidebar.slider("Blocked edge fraction", min_value=0.0, max_value=0.5, value=0.05, step=0.01, help="Fraction of undirected edges to mark as inaccessible (penalized)")
 tsp_blocked_count = st.sidebar.number_input("Blocked edge count (0 = use fraction)", min_value=0, value=0, step=1)
-tsp_penalty = st.sidebar.number_input("Penalty for blocked edge", min_value=1.0, value=1e6, format="%.0f", help="Large number added to distance for blocked edges")
+tsp_penalty = st.sidebar.number_input("Blocked-edge penalty (unused)", min_value=1.0, value=1e6, format="%.0f", help="Kept for backward compatibility; blocked edges are now hard constraints.")
 tsp_mode_seed = st.sidebar.number_input("Noise seed (0=random)", min_value=0, value=0, step=1)
+auto_relax_blocks = st.sidebar.checkbox("Auto-relax blocked edges when infeasible", value=False, help="Automatically unblock some edges until the instance is feasible for exact/optimizers.")
 
 if st.sidebar.button("Generate New TSP Instance", type="primary"):
     seed = None if instance_seed == 0 else int(instance_seed)
     st.session_state["coords"] = generate_cities(int(num_cities), seed=seed, clustered=clustered)
     st.session_state["needs_exact"] = True
     # set dynamic/noisy params on generation
-    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed))
+    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed), auto_relax=bool(auto_relax_blocks))
 
 if st.session_state["coords"] is None:
     seed = None if instance_seed == 0 else int(instance_seed)
     st.session_state["coords"] = generate_cities(int(num_cities), seed=seed, clustered=clustered)
     st.session_state["needs_exact"] = True
-    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed))
+    dynamic_env.set_params(mode=tsp_mode, blocked_fraction=float(tsp_blocked_fraction), blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count), penalty=float(tsp_penalty), seed=None if int(tsp_mode_seed) == 0 else int(tsp_mode_seed), auto_relax=bool(auto_relax_blocks))
 
 coords = st.session_state["coords"]
 
 if st.session_state.get("needs_exact", True):
     with st.spinner("Computing exact/optimal route for this TSP instance..."):
         try:
-            st.session_state["exact_result"] = solve_tsp_exact(coords, max_seconds=int(exact_timeout))
+            blocked_mask = dynamic_env.get_block_mask(len(coords), iteration=0 if tsp_mode == "dynamic" else None)
+            st.session_state["exact_result"] = solve_tsp_exact(coords, max_seconds=int(exact_timeout), blocked_mask=blocked_mask)
         except Exception as exc:
             st.session_state["exact_result"] = {
                 "error": str(exc),
@@ -337,6 +339,12 @@ with map_col:
     st.subheader("Exact Baseline")
     if exact_result and exact_result.get("error"):
         st.error(f"Exact solver failed: {exact_result['error']}")
+        # If auto-relax ran, show how many edges were unblocked
+        try:
+            if getattr(dynamic_env, "LAST_RELAXED_UNBLOCKED", 0) > 0:
+                st.info(f"Auto-relax unblocked {int(dynamic_env.LAST_RELAXED_UNBLOCKED)} edges to make the instance solvable.")
+        except Exception:
+            pass
     elif exact_result:
         c1, c2, c3 = st.columns(3)
         c1.metric("Exact route length", f"{exact_result['length']:.3f}")
@@ -345,6 +353,11 @@ with map_col:
         st.caption(
             f"Method: {exact_result.get('method', 'unknown')} | Optimal proven: {exact_result.get('is_optimal', False)}"
         )
+        try:
+            if getattr(dynamic_env, "LAST_RELAXED_UNBLOCKED", 0) > 0:
+                st.info(f"Auto-relax unblocked {int(dynamic_env.LAST_RELAXED_UNBLOCKED)} edges to make the instance solvable.")
+        except Exception:
+            pass
 
 with right_col:
     st.subheader("Algorithm Workspace")
@@ -564,23 +577,22 @@ with right_col:
             )
             progress = st.progress(0)
 
-            def cb(iteration, best_len, best_tour, convergence_iteration=None):
+            def cb(iteration, best_len, best_tour, convergence_iteration=None, **kwargs):
                 progress.progress(int((iteration + 1) / ac.n_iterations * 100))
-                if best_tour is None:
-                    return
                 fx = go.Figure()
                 _base_city_trace(fx)
                 _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
-                x_aco, y_aco = _tour_xy(best_tour)
-                fx.add_trace(
-                    go.Scatter(
-                        x=x_aco,
-                        y=y_aco,
-                        mode="lines",
-                        line=dict(width=4, color="#d62728"),
-                        name="ACO Best",
+                if best_tour is not None:
+                    x_aco, y_aco = _tour_xy(best_tour)
+                    fx.add_trace(
+                        go.Scatter(
+                            x=x_aco,
+                            y=y_aco,
+                            mode="lines",
+                            line=dict(width=4, color="#d62728"),
+                            name="ACO Best",
+                        )
                     )
-                )
                 if exact_result and exact_result.get("tour"):
                     x_opt, y_opt = _tour_xy(exact_result["tour"])
                     fx.add_trace(
@@ -592,14 +604,25 @@ with right_col:
                             name="Exact",
                         )
                     )
-                fx.update_layout(title=f"ACO progress (iteration {iteration})", height=420)
+                # show diagnostic valid fraction if available
+                valid_fraction = kwargs.get("valid_fraction")
+                title = f"ACO progress (iteration {iteration})"
+                if valid_fraction is not None:
+                    title += f" — valid {valid_fraction * 100:.0f}%"
+                fx.update_layout(title=title, height=420)
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(ac, cb, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
-            elapsed_s = time.perf_counter() - run_start
-            best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
-            if isinstance(run_result, tuple):
+            try:
+                run_result = _run_optimizer_with_optional_stats(ac, cb, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                st.session_state["last_run"] = {"mode": tsp_mode, "model": "ACO", "error": str(exc)}
+                run_result = None
+            if run_result is not None:
+                elapsed_s = time.perf_counter() - run_start
+                best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
+                if isinstance(run_result, tuple):
                 if len(run_result) == 3:
                     best_tour, best_len, history = run_result
                 elif len(run_result) == 4:
@@ -608,8 +631,8 @@ with right_col:
                     best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
                 if len(run_result) >= 6:
                     stats = run_result[5]
-            if stats is None:
-                stats = _fallback_stats(
+                if stats is None:
+                    stats = _fallback_stats(
                     model="ACO",
                     history=history,
                     best_len=best_len,
@@ -619,13 +642,13 @@ with right_col:
                     population_size=int(st.session_state["aco_num_ants"]),
                 )
 
-            gap_text = ""
-            gap_value = None
-            if exact_result and exact_result.get("length"):
-                opt_len = float(exact_result["length"])
-                gap = ((float(best_len) - opt_len) / opt_len) * 100.0
-                gap_text = f" | Optimality gap: {gap:.3f}%"
-                gap_value = float(gap)
+                gap_text = ""
+                gap_value = None
+                if exact_result and exact_result.get("length") and best_len is not None:
+                    opt_len = float(exact_result["length"])
+                    gap = ((float(best_len) - opt_len) / opt_len) * 100.0
+                    gap_text = f" | Optimality gap: {gap:.3f}%"
+                    gap_value = float(gap)
 
             iter_text = ""
             if best_found_iter is not None:
@@ -633,44 +656,43 @@ with right_col:
             elif convergence_iteration is not None:
                 iter_text = f" | Converged at iteration: {convergence_iteration}"
 
-            run_summary = {
-                "mode": tsp_mode,
-                "model": "ACO",
-                "best_len": float(best_len),
-                "optimality_gap_pct": gap_value,
-                "best_found_iteration": int(stats["best_found_iteration"]),
-                "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
-                "convergence_time_s": float(stats["convergence_time_s"]),
-                "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                "objective_evals_total": int(stats["objective_evals_total"]),
-                "run_time_s": float(stats["run_time_s"]),
-                "iterations_executed": int(stats.get("iterations_executed", st.session_state["aco_iterations"])),
-                "stopped_early": bool(stats.get("stopped_early", False)),
-                "iterations": int(st.session_state["aco_iterations"]),
-                "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
-            }
-            if tsp_mode == "dynamic":
-                dyn = _dynamic_metrics_from_history(
-                    history if isinstance(history, list) else [],
-                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
-                )
-                run_summary.update(
-                    {
-                        "best_found_iteration": None,
-                        "convergence_iteration": None,
-                        "convergence_time_s": None,
-                        "optimality_gap_pct": None,
-                        "stopped_early": False,
-                        **dyn,
-                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
-                    }
-                )
-            st.session_state["last_run"] = run_summary
-            # cleanup any applied penalties
-            try:
-                clear_edge_penalties()
-            except Exception:
-                pass
+                run_summary = {
+                    "mode": tsp_mode,
+                    "model": "ACO",
+                    "best_len": float(best_len) if best_len is not None else None,
+                    "optimality_gap_pct": gap_value,
+                    "best_found_iteration": int(stats["best_found_iteration"]),
+                    "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
+                    "convergence_time_s": float(stats["convergence_time_s"]),
+                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
+                    "objective_evals_total": int(stats["objective_evals_total"]),
+                    "run_time_s": float(stats["run_time_s"]),
+                    "iterations_executed": int(stats.get("iterations_executed", st.session_state["aco_iterations"])),
+                    "stopped_early": bool(stats.get("stopped_early", False)),
+                    "iterations": int(st.session_state["aco_iterations"]),
+                    "note": f"Best length {best_len:.3f}{iter_text}{gap_text}" if best_len is not None else "Run completed with no valid tour",
+                }
+                if tsp_mode == "dynamic":
+                    dyn = _dynamic_metrics_from_history(
+                        history if isinstance(history, list) else [],
+                        float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                    )
+                    run_summary.update(
+                        {
+                            "best_len": None,
+                            "best_found_iteration": None,
+                            "convergence_iteration": None,
+                            "convergence_time_s": None,
+                            "optimality_gap_pct": None,
+                            "stopped_early": False,
+                            "objective_evals_to_convergence": None,
+                            "exact_match_rate": None,
+                            **dyn,
+                            "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                        }
+                    )
+                st.session_state["last_run"] = run_summary
+            # end if run_result is not None
 
         elif algorithm == "Artificial Bee Colony":
             abc_seed = None if int(st.session_state.get("abc_seed", 0)) == 0 else int(st.session_state.get("abc_seed", 0))
@@ -684,23 +706,22 @@ with right_col:
             )
             progress = st.progress(0)
 
-            def cb_abc(iteration, best_len, best_tour, convergence_iteration=None):
+            def cb_abc(iteration, best_len, best_tour, convergence_iteration=None, **kwargs):
                 progress.progress(int((iteration + 1) / abc.n_iterations * 100))
-                if best_tour is None:
-                    return
                 fx = go.Figure()
                 _base_city_trace(fx)
                 _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
-                x_abc, y_abc = _tour_xy(best_tour)
-                fx.add_trace(
-                    go.Scatter(
-                        x=x_abc,
-                        y=y_abc,
-                        mode="lines",
-                        line=dict(width=4, color="#ff7f0e"),
-                        name="ABC Best",
+                if best_tour is not None:
+                    x_abc, y_abc = _tour_xy(best_tour)
+                    fx.add_trace(
+                        go.Scatter(
+                            x=x_abc,
+                            y=y_abc,
+                            mode="lines",
+                            line=dict(width=4, color="#ff7f0e"),
+                            name="ABC Best",
+                        )
                     )
-                )
                 if exact_result and exact_result.get("tour"):
                     x_opt, y_opt = _tour_xy(exact_result["tour"])
                     fx.add_trace(
@@ -712,14 +733,24 @@ with right_col:
                             name="Exact",
                         )
                     )
-                fx.update_layout(title=f"ABC progress (iteration {iteration})", height=420)
+                valid_fraction = kwargs.get("valid_fraction")
+                title = f"ABC progress (iteration {iteration})"
+                if valid_fraction is not None:
+                    title += f" — valid {valid_fraction * 100:.0f}%"
+                fx.update_layout(title=title, height=420)
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(abc, cb_abc, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
-            elapsed_s = time.perf_counter() - run_start
-            best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
-            if isinstance(run_result, tuple):
+            try:
+                run_result = _run_optimizer_with_optional_stats(abc, cb_abc, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                st.session_state["last_run"] = {"mode": tsp_mode, "model": "ABC", "error": str(exc)}
+                run_result = None
+            if run_result is not None:
+                elapsed_s = time.perf_counter() - run_start
+                best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
+                if isinstance(run_result, tuple):
                 if len(run_result) == 3:
                     best_tour, best_len, history = run_result
                 elif len(run_result) == 4:
@@ -739,13 +770,13 @@ with right_col:
                     population_size=int(st.session_state.get("abc_num_food_sources", 20)),
                 )
 
-            gap_text = ""
-            gap_value = None
-            if exact_result and exact_result.get("length"):
-                opt_len = float(exact_result["length"])
-                gap = ((float(best_len) - opt_len) / opt_len) * 100.0
-                gap_text = f" | Optimality gap: {gap:.3f}%"
-                gap_value = float(gap)
+                gap_text = ""
+                gap_value = None
+                if exact_result and exact_result.get("length") and best_len is not None:
+                    opt_len = float(exact_result["length"])
+                    gap = ((float(best_len) - opt_len) / opt_len) * 100.0
+                    gap_text = f" | Optimality gap: {gap:.3f}%"
+                    gap_value = float(gap)
 
             iter_text = ""
             if best_found_iter is not None:
@@ -776,20 +807,20 @@ with right_col:
                 )
                 run_summary.update(
                     {
+                        "best_len": None,
                         "best_found_iteration": None,
                         "convergence_iteration": None,
                         "convergence_time_s": None,
                         "optimality_gap_pct": None,
                         "stopped_early": False,
+                        "objective_evals_to_convergence": None,
+                        "exact_match_rate": None,
                         **dyn,
                         "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
                     }
                 )
-            st.session_state["last_run"] = run_summary
-            try:
-                clear_edge_penalties()
-            except Exception:
-                pass
+                st.session_state["last_run"] = run_summary
+            # end if run_result is not None
 
         elif algorithm == "Genetic Algorithm":
             ga_seed = None if int(st.session_state.get("ga_seed", 0)) == 0 else int(st.session_state.get("ga_seed", 0))
@@ -806,23 +837,22 @@ with right_col:
             )
             progress = st.progress(0)
 
-            def cb_ga(iteration, best_len, best_tour, convergence_iteration=None):
+            def cb_ga(iteration, best_len, best_tour, convergence_iteration=None, **kwargs):
                 progress.progress(int((iteration + 1) / ga.n_iterations * 100))
-                if best_tour is None:
-                    return
                 fx = go.Figure()
                 _base_city_trace(fx)
                 _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
-                x_ga, y_ga = _tour_xy(best_tour)
-                fx.add_trace(
-                    go.Scatter(
-                        x=x_ga,
-                        y=y_ga,
-                        mode="lines",
-                        line=dict(width=4, color="#9467bd"),
-                        name="GA Best",
+                if best_tour is not None:
+                    x_ga, y_ga = _tour_xy(best_tour)
+                    fx.add_trace(
+                        go.Scatter(
+                            x=x_ga,
+                            y=y_ga,
+                            mode="lines",
+                            line=dict(width=4, color="#9467bd"),
+                            name="GA Best",
+                        )
                     )
-                )
                 if exact_result and exact_result.get("tour"):
                     x_opt, y_opt = _tour_xy(exact_result["tour"])
                     fx.add_trace(
@@ -834,84 +864,110 @@ with right_col:
                             name="Exact",
                         )
                     )
-                fx.update_layout(title=f"GA progress (iteration {iteration})", height=420)
+                valid_fraction = kwargs.get("valid_fraction")
+                title = f"GA progress (iteration {iteration})"
+                if valid_fraction is not None:
+                    title += f" — valid {valid_fraction * 100:.0f}%"
+                fx.update_layout(title=title, height=420)
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(ga, cb_ga, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
-            elapsed_s = time.perf_counter() - run_start
-            best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
-            if isinstance(run_result, tuple):
-                if len(run_result) == 3:
-                    best_tour, best_len, history = run_result
-                elif len(run_result) == 4:
-                    best_tour, best_len, history, convergence_iteration = run_result
-                elif len(run_result) >= 5:
-                    best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
-                if len(run_result) >= 6:
-                    stats = run_result[5]
-            if stats is None:
-                stats = _fallback_stats(
-                    model="GA",
-                    history=history,
-                    best_len=best_len,
-                    best_found_iter=best_found_iter,
-                    convergence_iteration=convergence_iteration,
-                    elapsed_s=elapsed_s,
-                    population_size=int(st.session_state.get("ga_population_size", 30)),
-                )
+            try:
+                run_result = _run_optimizer_with_optional_stats(ga, cb_ga, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                st.session_state["last_run"] = {"mode": tsp_mode, "model": "GA", "error": str(exc)}
+                run_result = None
 
-            gap_text = ""
-            gap_value = None
-            if exact_result and exact_result.get("length"):
-                opt_len = float(exact_result["length"])
-                gap = ((float(best_len) - opt_len) / opt_len) * 100.0
-                gap_text = f" | Optimality gap: {gap:.3f}%"
-                gap_value = float(gap)
+            if run_result is not None:
+                elapsed_s = time.perf_counter() - run_start
+                best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
+                if isinstance(run_result, tuple):
+                    if len(run_result) == 3:
+                        best_tour, best_len, history = run_result
+                    elif len(run_result) == 4:
+                        best_tour, best_len, history, convergence_iteration = run_result
+                    elif len(run_result) >= 5:
+                        best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
+                    if len(run_result) >= 6:
+                        stats = run_result[5]
+                if stats is None:
+                    stats = _fallback_stats(
+                        model="GA",
+                        history=history,
+                        best_len=best_len,
+                        best_found_iter=best_found_iter,
+                        convergence_iteration=convergence_iteration,
+                        elapsed_s=elapsed_s,
+                        population_size=int(st.session_state.get("ga_population_size", 30)),
+                    )
 
-            iter_text = ""
-            if best_found_iter is not None:
-                iter_text = f" | Best found at iteration: {best_found_iter}"
-            elif convergence_iteration is not None:
-                iter_text = f" | Converged at iteration: {convergence_iteration}"
+                gap_text = ""
+                gap_value = None
+                if exact_result and exact_result.get("length") and best_len is not None:
+                    opt_len = float(exact_result["length"])
+                    gap = ((float(best_len) - opt_len) / opt_len) * 100.0
+                    gap_text = f" | Optimality gap: {gap:.3f}%"
+                    gap_value = float(gap)
 
-            run_summary = {
-                "mode": tsp_mode,
-                "model": "GA",
-                "best_len": float(best_len),
-                "optimality_gap_pct": gap_value,
-                "best_found_iteration": int(stats["best_found_iteration"]),
-                "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
-                "convergence_time_s": float(stats["convergence_time_s"]),
-                "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                "objective_evals_total": int(stats["objective_evals_total"]),
-                "run_time_s": float(stats["run_time_s"]),
-                "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("ga_iterations", 200))),
-                "stopped_early": bool(stats.get("stopped_early", False)),
-                "iterations": int(st.session_state.get("ga_iterations", 200)),
-                "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
-            }
-            if tsp_mode == "dynamic":
-                dyn = _dynamic_metrics_from_history(
-                    history if isinstance(history, list) else [],
-                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
-                )
-                run_summary.update(
+                iter_text = ""
+                if best_found_iter is not None:
+                    iter_text = f" | Best found at iteration: {best_found_iter}"
+                elif convergence_iteration is not None:
+                    iter_text = f" | Converged at iteration: {convergence_iteration}"
+
+                run_summary = {
+                    "mode": tsp_mode,
+                    "model": "GA",
+                    "best_len": float(best_len) if best_len is not None else None,
+                    "optimality_gap_pct": gap_value,
+                    "best_found_iteration": int(stats["best_found_iteration"]),
+                    "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
+                    "convergence_time_s": float(stats["convergence_time_s"]),
+                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
+                    "objective_evals_total": int(stats["objective_evals_total"]),
+                    "run_time_s": float(stats["run_time_s"]),
+                    "iterations_executed": int(stats.get("iterations_executed", st.session_state["ga_iterations"])),
+                    "stopped_early": bool(stats.get("stopped_early", False)),
+                    "iterations": int(st.session_state["ga_iterations"]),
+                    "note": f"Best length {best_len:.3f}{iter_text}{gap_text}" if best_len is not None else "Run completed with no valid tour",
+                }
+                if tsp_mode == "dynamic":
+                    dyn = _dynamic_metrics_from_history(
+                        history if isinstance(history, list) else [],
+                        float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                    )
+                    run_summary.update(
+                        {
+                            "best_len": None,
+                            "best_found_iteration": None,
+                            "convergence_iteration": None,
+                            "convergence_time_s": None,
+                            "optimality_gap_pct": None,
+                            "stopped_early": False,
+                            "objective_evals_to_convergence": None,
+                            "exact_match_rate": None,
+                            **dyn,
+                            "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                        }
+                    )
+                st.session_state["last_run"] = run_summary
+            # end if run_result is not None
                     {
+                        "best_len": None,
                         "best_found_iteration": None,
                         "convergence_iteration": None,
                         "convergence_time_s": None,
                         "optimality_gap_pct": None,
                         "stopped_early": False,
+                        "objective_evals_to_convergence": None,
+                        "exact_match_rate": None,
                         **dyn,
                         "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
                     }
                 )
-            st.session_state["last_run"] = run_summary
-            try:
-                clear_edge_penalties()
-            except Exception:
-                pass
+                st.session_state["last_run"] = run_summary
+            # end if run_result is not None
 
         elif algorithm == "Particle Swarm Optimization":
             pso_seed = None if int(st.session_state.get("pso_seed", 0)) == 0 else int(st.session_state.get("pso_seed", 0))
@@ -927,23 +983,22 @@ with right_col:
             )
             progress = st.progress(0)
 
-            def cb_pso(iteration, best_len, best_tour, convergence_iteration=None):
+            def cb_pso(iteration, best_len, best_tour, convergence_iteration=None, **kwargs):
                 progress.progress(int((iteration + 1) / pso.n_iterations * 100))
-                if best_tour is None:
-                    return
                 fx = go.Figure()
                 _base_city_trace(fx)
                 _add_blocked_edges_overlay(fx, mode=tsp_mode, iteration=iteration)
-                x_pso, y_pso = _tour_xy(best_tour)
-                fx.add_trace(
-                    go.Scatter(
-                        x=x_pso,
-                        y=y_pso,
-                        mode="lines",
-                        line=dict(width=4, color="#2ca02c"),
-                        name="PSO Best",
+                if best_tour is not None:
+                    x_pso, y_pso = _tour_xy(best_tour)
+                    fx.add_trace(
+                        go.Scatter(
+                            x=x_pso,
+                            y=y_pso,
+                            mode="lines",
+                            line=dict(width=4, color="#2ca02c"),
+                            name="PSO Best",
+                        )
                     )
-                )
                 if exact_result and exact_result.get("tour"):
                     x_opt, y_opt = _tour_xy(exact_result["tour"])
                     fx.add_trace(
@@ -955,12 +1010,22 @@ with right_col:
                             name="Exact",
                         )
                     )
-                fx.update_layout(title=f"PSO progress (iteration {iteration})", height=420)
+                valid_fraction = kwargs.get("valid_fraction")
+                title = f"PSO progress (iteration {iteration})"
+                if valid_fraction is not None:
+                    title += f" — valid {valid_fraction * 100:.0f}%"
+                fx.update_layout(title=title, height=420)
                 chart_placeholder.plotly_chart(fx, width="stretch")
 
             run_start = time.perf_counter()
-            run_result = _run_optimizer_with_optional_stats(pso, cb_pso, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
-            elapsed_s = time.perf_counter() - run_start
+            try:
+                run_result = _run_optimizer_with_optional_stats(pso, cb_pso, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+            except Exception as exc:
+                st.error(f"Run failed: {exc}")
+                st.session_state["last_run"] = {"mode": tsp_mode, "model": "PSO", "error": str(exc)}
+                run_result = None
+            if run_result is not None:
+                elapsed_s = time.perf_counter() - run_start
             best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
             if isinstance(run_result, tuple):
                 if len(run_result) == 3:
@@ -1019,20 +1084,20 @@ with right_col:
                 )
                 run_summary.update(
                     {
+                        "best_len": None,
                         "best_found_iteration": None,
                         "convergence_iteration": None,
                         "convergence_time_s": None,
                         "optimality_gap_pct": None,
                         "stopped_early": False,
+                        "objective_evals_to_convergence": None,
+                        "exact_match_rate": None,
                         **dyn,
                         "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
                     }
                 )
-            st.session_state["last_run"] = run_summary
-            try:
-                clear_edge_penalties()
-            except Exception:
-                pass
+                st.session_state["last_run"] = run_summary
+            # end if run_result is not None
 
         else:
             st.info("Selected algorithm is not available.")

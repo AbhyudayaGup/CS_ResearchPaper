@@ -2,7 +2,7 @@ import numpy as np
 import math
 import time
 from .utils import distance_matrix
-from .aco import two_opt, tour_length, apply_edge_penalties
+from .aco import two_opt, tour_length
 from . import dynamic_env
 
 
@@ -40,12 +40,16 @@ class ParticleSwarm:
         perm = np.argsort(-keys)
         return list(map(int, perm))
 
-    def _evaluate(self, position):
+    def _evaluate(self, position, blocked_mask=None):
         tour = self._decode(position)
         if self.apply_two_opt:
-            tour, L, eval_count = two_opt(tour, self.coords, return_eval_count=True)
+            tour, L, eval_count = two_opt(tour, self.coords, return_eval_count=True, blocked_mask=blocked_mask)
+            if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+                return None, float('inf'), 0
             return tour, L, eval_count
-        L = tour_length(tour, self.coords)
+        if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+            return None, float('inf'), 0
+        L = tour_length(tour, self.coords, blocked_mask=blocked_mask)
         return tour, L, 1
 
     def run(self, callback=None, return_stats=False, target_length=None, target_gap_pct=0.0, target_tolerance=1e-9):
@@ -79,16 +83,17 @@ class ParticleSwarm:
                 return True
             return gap_pct <= float(target_gap_pct)
 
-        # apply initial penalty matrix (noisy) if present
-        try:
-            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
-            apply_edge_penalties(pm)
-        except Exception:
-            pass
+        blocked_mask = dynamic_env.get_block_mask(self.n, iteration=0)
 
         # evaluate initial particles
         for i in range(self.n_particles):
-            tour, L, eval_count = self._evaluate(self.positions[i])
+            tour, L, eval_count = self._evaluate(self.positions[i], blocked_mask=blocked_mask)
+            if tour is None:
+                valid_tour = dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask)
+                if valid_tour is None:
+                    raise RuntimeError("No feasible tours could be generated for PSO under the configured blocked edges. Adjust blocked edge settings or seed.")
+                self.positions[i] = self.rng.random(self.n)
+                tour, L, eval_count = self._evaluate(self.positions[i], blocked_mask=blocked_mask)
             objective_evals_total += eval_count
             self.pbest_pos[i] = self.positions[i].copy()
             self.pbest_score[i] = L
@@ -106,10 +111,28 @@ class ParticleSwarm:
 
         if not stopped_early:
             for it in range(self.n_iterations):
-                # update penalty matrix per-iteration for dynamic mode
+                blocked_mask = dynamic_env.get_block_mask(self.n, iteration=it)
+                # In dynamic mode, invalidate/re-evaluate personal/global bests if they use now-blocked edges
                 try:
-                    pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
-                    apply_edge_penalties(pm)
+                    if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                        # refresh pbest scores
+                        for i in range(self.n_particles):
+                            try:
+                                tour = list(map(int, np.argsort(-self.pbest_pos[i] + (self.rng.random(self.n) * 0.0))))
+                                if dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+                                    self.pbest_score[i] = float('inf')
+                            except Exception:
+                                self.pbest_score[i] = float('inf')
+                        # refresh gbest
+                        if self.gbest_pos is not None:
+                            try:
+                                tour = list(map(int, np.argsort(-self.gbest_pos + (self.rng.random(self.n) * 0.0))))
+                                if dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+                                    self.gbest_pos = None
+                                    self.gbest_score = float('inf')
+                            except Exception:
+                                self.gbest_pos = None
+                                self.gbest_score = float('inf')
                 except Exception:
                     pass
                 for i in range(self.n_particles):
@@ -122,7 +145,13 @@ class ParticleSwarm:
                     # keep positions bounded
                     self.positions[i] = np.mod(self.positions[i], 1.0)
 
-                    tour, L, eval_count = self._evaluate(self.positions[i])
+                    tour, L, eval_count = self._evaluate(self.positions[i], blocked_mask=blocked_mask)
+                    if tour is None:
+                        valid_tour = dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask)
+                        if valid_tour is None:
+                            continue
+                        self.positions[i] = self.rng.random(self.n)
+                        tour, L, eval_count = self._evaluate(self.positions[i], blocked_mask=blocked_mask)
                     objective_evals_total += eval_count
                     if L < self.pbest_score[i]:
                         self.pbest_score[i] = L
@@ -140,8 +169,12 @@ class ParticleSwarm:
                             convergence_iteration = it
 
                 history.append(best_len)
+                # diagnostics: fraction of particles with feasible tours
+                total = self.n_particles
+                valid = sum(1 for s in self.pbest_score if np.isfinite(float(s))) if total > 0 else 0
+                valid_fraction = float(valid) / float(max(1, total))
                 if callback is not None:
-                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)
 
                 if reached_target(best_len):
                     stopped_early = True

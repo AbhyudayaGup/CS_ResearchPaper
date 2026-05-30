@@ -5,19 +5,23 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .aco import two_opt, tour_length, apply_edge_penalties
+from .aco import two_opt, tour_length
 from . import dynamic_env
 
 
-def _random_tour(rng: np.random.Generator, n: int) -> list[int]:
-    return rng.permutation(n).astype(int).tolist()
+def _random_tour(rng: np.random.Generator, n: int, blocked_mask=None) -> list[int] | None:
+    return dynamic_env.random_valid_tour(n, rng, blocked_mask)
 
 
-def _evaluate_tour(coords: np.ndarray, tour: list[int], apply_two_opt: bool) -> tuple[list[int], float, int]:
+def _evaluate_tour(coords: np.ndarray, tour: list[int] | None, apply_two_opt: bool, blocked_mask=None) -> tuple[list[int] | None, float, int]:
+    if tour is None:
+        return None, float("inf"), 0
+    if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+        return None, float("inf"), 0
     if apply_two_opt:
-        improved_tour, improved_len, eval_count = two_opt(tour, coords, return_eval_count=True)
+        improved_tour, improved_len, eval_count = two_opt(tour, coords, return_eval_count=True, blocked_mask=blocked_mask)
         return improved_tour, float(improved_len), int(eval_count)
-    return tour, float(tour_length(tour, coords)), 1
+    return tour, float(tour_length(tour, coords, blocked_mask=blocked_mask)), 1
 
 
 def _order_crossover(rng: np.random.Generator, parent_a: list[int], parent_b: list[int]) -> list[int]:
@@ -97,6 +101,15 @@ class GeneticAlgorithm:
             child = _mutate_tour(self.rng, child)
         return child
 
+    def _make_valid_child(self, population: list[list[int]], scores: list[float], blocked_mask=None) -> list[int] | None:
+        for _ in range(30):
+            parent_a = self._select_parent(population, scores)
+            parent_b = self._select_parent(population, scores)
+            child = self._breed_child(parent_a, parent_b)
+            if blocked_mask is None or not dynamic_env.tour_has_blocked_edge(child, blocked_mask):
+                return child
+        return dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask)
+
     def run(
         self,
         callback: Callable[..., None] | None = None,
@@ -137,16 +150,11 @@ class GeneticAlgorithm:
 
         population: list[list[int]] = []
         scores: list[float] = []
-        # apply initial penalty matrix (noisy) if present
-        try:
-            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
-            apply_edge_penalties(pm)
-        except Exception:
-            pass
+        blocked_mask = dynamic_env.get_block_mask(self.n, iteration=0)
 
         for _ in range(self.n_population):
-            tour = _random_tour(self.rng, self.n)
-            tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt)
+            tour = _random_tour(self.rng, self.n, blocked_mask)
+            tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt, blocked_mask=blocked_mask)
             objective_evals_total += eval_count
             population.append(tour)
             scores.append(float(length))
@@ -157,6 +165,10 @@ class GeneticAlgorithm:
                 objective_evals_to_convergence = objective_evals_total
                 convergence_time_s = time.perf_counter() - t0
 
+        # If the initial population contains no feasible solutions, fail early with helpful message
+        if all((not np.isfinite(float(s)) for s in scores)):
+            raise RuntimeError("No feasible tours could be generated for the GA under the configured blocked edges. Adjust blocked edge settings or seed.")
+
         if best_tour is not None:
             convergence_iteration = 0
 
@@ -164,10 +176,22 @@ class GeneticAlgorithm:
             stopped_early = True
         else:
             for it in range(self.n_iterations):
-                # update penalty matrix per-iteration for dynamic mode
+                blocked_mask = dynamic_env.get_block_mask(self.n, iteration=it)
+                # If dynamic environment, refresh population members that became invalid
                 try:
-                    pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
-                    apply_edge_penalties(pm)
+                    if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                        for idx, indiv in enumerate(population):
+                            if indiv is None or dynamic_env.tour_has_blocked_edge(indiv, blocked_mask):
+                                # try to replace with a random valid tour
+                                newt = dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask)
+                                if newt is None:
+                                    # mark as infeasible
+                                    population[idx] = None
+                                    scores[idx] = float('inf')
+                                else:
+                                    population[idx] = newt
+                                    # evaluate length (without two-opt here, will be evaluated below)
+                                    scores[idx] = float(tour_length(newt, self.coords, blocked_mask=blocked_mask))
                 except Exception:
                     pass
                 ranked = sorted(zip(population, scores), key=lambda item: float(item[1]))
@@ -178,10 +202,8 @@ class GeneticAlgorithm:
                 new_scores: list[float] = elite_scores
 
                 while len(new_population) < self.n_population:
-                    parent_a = self._select_parent(population, scores)
-                    parent_b = self._select_parent(population, scores)
-                    child = self._breed_child(parent_a, parent_b)
-                    child, child_len, eval_count = _evaluate_tour(self.coords, child, self.apply_two_opt)
+                    child = self._make_valid_child(population, scores, blocked_mask=blocked_mask)
+                    child, child_len, eval_count = _evaluate_tour(self.coords, child, self.apply_two_opt, blocked_mask=blocked_mask)
                     objective_evals_total += eval_count
                     new_population.append(child)
                     new_scores.append(float(child_len))
@@ -202,8 +224,12 @@ class GeneticAlgorithm:
                     convergence_iteration = it
 
                 history.append(best_len)
+                # diagnostics: fraction of valid individuals
+                total = len(population)
+                valid = sum(1 for s in scores if np.isfinite(float(s))) if total > 0 else 0
+                valid_fraction = float(valid) / float(max(1, total))
                 if callback is not None:
-                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)
 
                 if reached_target(best_len):
                     stopped_early = True

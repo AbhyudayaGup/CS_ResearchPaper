@@ -10,10 +10,10 @@ def two_opt_swap(tour, i, k):
     return new
 
 
-def two_opt(tour, coords, return_eval_count=False):
+def two_opt(tour, coords, return_eval_count=False, blocked_mask=None):
     improved = True
     best = tour
-    best_len = tour_length(best, coords)
+    best_len = tour_length(best, coords, blocked_mask=blocked_mask)
     eval_count = 1
     n = len(tour)
     while improved:
@@ -21,7 +21,9 @@ def two_opt(tour, coords, return_eval_count=False):
         for i in range(1, n - 2):
             for k in range(i + 1, n - 1):
                 new = two_opt_swap(best, i, k)
-                new_len = tour_length(new, coords)
+                if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(new, blocked_mask):
+                    continue
+                new_len = tour_length(new, coords, blocked_mask=blocked_mask)
                 eval_count += 1
                 if new_len < best_len:
                     best = new
@@ -33,39 +35,17 @@ def two_opt(tour, coords, return_eval_count=False):
     return best, best_len
 
 
-def tour_length(tour, coords):
+def tour_length(tour, coords, blocked_mask=None):
     coords = np.asarray(coords)
     n = len(tour)
     total = 0.0
     for i in range(n):
+        if blocked_mask is not None and bool(blocked_mask[int(tour[i]), int(tour[(i + 1) % n])]):
+            return float('inf')
         a = coords[tour[i]]
         b = coords[tour[(i + 1) % n]]
-        base = math.hypot(a[0] - b[0], a[1] - b[1])
-        # apply optional edge penalties from dynamic_env (set by UI)
-        try:
-            penalty = 0.0
-            if hasattr(tour_length, "_penalty_matrix") and tour_length._penalty_matrix is not None:
-                pm = tour_length._penalty_matrix
-                penalty = float(pm[int(tour[i]), int(tour[(i + 1) % n])])
-            total += base + penalty
-        except Exception:
-            total += base
+        total += math.hypot(a[0] - b[0], a[1] - b[1])
     return total
-
-
-def apply_edge_penalties(matrix):
-    # attach penalty matrix to tour_length function for algorithms to use
-    try:
-        tour_length._penalty_matrix = None if matrix is None else matrix.astype(float)
-    except Exception:
-        tour_length._penalty_matrix = None
-
-
-def clear_edge_penalties():
-    try:
-        tour_length._penalty_matrix = None
-    except Exception:
-        pass
 
 
 class AntColony:
@@ -90,35 +70,57 @@ class AntColony:
             pheromone_init = 1.0 / self.n
         self.pheromone = np.full((self.n, self.n), pheromone_init, dtype=float)
 
-    def _select_next(self, current, visited_mask):
+    def _select_next(self, current, visited_mask, blocked_mask=None):
         pher = self.pheromone[current] ** self.alpha
         heur = self.heuristic[current] ** self.beta
         prob = pher * heur
-        prob = prob * (~visited_mask)
+        allowed = ~visited_mask
+        if blocked_mask is not None:
+            allowed = allowed & (~blocked_mask[current])
+        prob = prob * allowed
         total = prob.sum()
         if total <= 0:
-            choices = np.where(~visited_mask)[0]
+            choices = np.where(allowed)[0]
+            if len(choices) == 0 and blocked_mask is not None:
+                choices = np.where(~visited_mask)[0]
+            if len(choices) == 0:
+                choices = np.arange(self.n)
             return int(self.rng.choice(choices))
         prob = prob / total
         return int(self.rng.choice(self.n, p=prob))
 
-    def _construct_solutions(self):
+    def _construct_solutions(self, blocked_mask=None):
         tours = []
         lengths = []
         eval_count = 0
         for _ in range(self.n_ants):
-            start = int(self.rng.integers(0, self.n))
+            valid_tour = dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask)
+            if valid_tour is None:
+                tours.append(None)
+                lengths.append(float('inf'))
+                continue
+            # build tour through pheromone-guided selection while avoiding blocked edges
+            start = int(valid_tour[0])
             tour = [start]
             visited = np.zeros(self.n, dtype=bool)
             visited[start] = True
             current = start
             while len(tour) < self.n:
-                nxt = self._select_next(current, visited)
+                nxt = self._select_next(current, visited, blocked_mask=blocked_mask)
+                if visited[nxt] or (blocked_mask is not None and blocked_mask[current, nxt]):
+                    # fallback to a valid unused city if possible
+                    choices = np.where((~visited) & ((~blocked_mask[current]) if blocked_mask is not None else True))[0]
+                    if len(choices) == 0:
+                        choices = np.where(~visited)[0]
+                    nxt = int(self.rng.choice(choices))
                 tour.append(nxt)
                 visited[nxt] = True
                 current = nxt
+            if dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+                lengths.append(float('inf'))
+            else:
+                lengths.append(tour_length(tour, self.coords, blocked_mask=blocked_mask))
             tours.append(tour)
-            lengths.append(tour_length(tour, self.coords))
             eval_count += 1
         return tours, lengths, eval_count
 
@@ -151,6 +153,14 @@ class AntColony:
         best_found_iter = None
         stopped_early = False
         t0 = time.perf_counter()
+        # quick feasibility check: ensure at least one valid tour exists under the initial mask
+        try:
+            blocked_mask0 = dynamic_env.get_block_mask(self.n, iteration=0)
+            if dynamic_env.random_valid_tour(self.n, self.rng, blocked_mask0) is None:
+                raise RuntimeError("Blocked edges make this TSP infeasible to build a valid Hamiltonian tour. Reduce blocked edges or change the seed.")
+        except Exception:
+            # if dynamic_env is unavailable for some reason, proceed and let later checks catch issues
+            pass
         objective_evals_total = 0
         objective_evals_to_convergence = None
         convergence_time_s = None
@@ -176,38 +186,49 @@ class AntColony:
                 return True
             return gap_pct <= float(target_gap_pct)
 
-        # initialize penalty matrix for iteration 0
-        try:
-            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
-            apply_edge_penalties(pm)
-        except Exception:
-            pass
-
         for it in range(self.n_iterations):
-            # update penalty matrix for this iteration (dynamic/noisy support)
+            blocked_mask = dynamic_env.get_block_mask(self.n, iteration=it)
+            # If environment changed, invalidate previously best tour if it uses blocked edges
             try:
-                pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
-                apply_edge_penalties(pm)
+                if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                    if best_tour is not None and dynamic_env.tour_has_blocked_edge(best_tour, blocked_mask):
+                        best_tour = None
+                        best_len = float('inf')
             except Exception:
                 pass
-            tours, lengths, eval_count = self._construct_solutions()
+            tours, lengths, eval_count = self._construct_solutions(blocked_mask=blocked_mask)
             objective_evals_total += eval_count
+            # compute valid fraction for diagnostics
+            valid_total = len(lengths) if lengths else 0
+            valid_count = sum(1 for L in lengths if np.isfinite(L)) if valid_total > 0 else 0
+            valid_fraction = float(valid_count) / float(max(1, valid_total))
             # optional local search
             if self.apply_two_opt:
+                pre_tours, pre_lengths = tours, lengths
                 new_tours = []
                 new_lengths = []
                 for tour, L in zip(tours, lengths):
-                    t, l, two_opt_evals = two_opt(tour, self.coords, return_eval_count=True)
+                    if tour is None or not np.isfinite(L):
+                        continue
+                    t, l, two_opt_evals = two_opt(tour, self.coords, return_eval_count=True, blocked_mask=blocked_mask)
+                    if dynamic_env.tour_has_blocked_edge(t, blocked_mask):
+                        l = float('inf')
                     objective_evals_total += two_opt_evals
                     new_tours.append(t)
                     new_lengths.append(l)
-                tours, lengths = new_tours, new_lengths
+                # If local search filtered out all candidates, fall back to pre-search results
+                if not new_lengths:
+                    tours, lengths = pre_tours, pre_lengths
+                else:
+                    tours, lengths = new_tours, new_lengths
             # track initial worst tour
             if it == 0:
-                initial_worst = max(lengths)
+                initial_worst = max(lengths) if lengths else float('inf')
             # update best
             prev_best = best_len
             for tour, L in zip(tours, lengths):
+                if tour is None or not np.isfinite(L):
+                    continue
                 if L < best_len:
                     best_len = L
                     best_tour = tour
@@ -221,7 +242,7 @@ class AntColony:
             self._update_pheromones(tours, lengths, best_so_far=best_tour, best_len=best_len)
             history.append(best_len)
             if callback is not None:
-                callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+                callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)
 
             if reached_target(best_len):
                 stopped_early = True

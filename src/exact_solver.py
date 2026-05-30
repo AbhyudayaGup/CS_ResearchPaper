@@ -6,24 +6,26 @@ from typing import Dict, List
 import numpy as np
 
 
-def _tour_length(tour: List[int], coords: np.ndarray) -> float:
+def _tour_length(tour: List[int], coords: np.ndarray, blocked_mask: np.ndarray | None = None) -> float:
     total = 0.0
     n = len(tour)
     for i in range(n):
+        if blocked_mask is not None and bool(blocked_mask[int(tour[i]), int(tour[(i + 1) % n])]):
+            return float("inf")
         a = coords[tour[i]]
         b = coords[tour[(i + 1) % n]]
         total += math.hypot(a[0] - b[0], a[1] - b[1])
     return total
 
 
-def _bruteforce_tsp(coords: np.ndarray) -> Dict:
+def _bruteforce_tsp(coords: np.ndarray, blocked_mask: np.ndarray | None = None) -> Dict:
     n = len(coords)
     nodes = list(range(n))
     best_tour = None
     best_len = float("inf")
     for perm in itertools.permutations(nodes[1:]):
         tour = [0] + list(perm)
-        length = _tour_length(tour, coords)
+        length = _tour_length(tour, coords, blocked_mask=blocked_mask)
         if length < best_len:
             best_len = length
             best_tour = tour
@@ -36,7 +38,7 @@ def _bruteforce_tsp(coords: np.ndarray) -> Dict:
     }
 
 
-def _cp_sat_tsp(coords: np.ndarray, max_seconds: int = 120) -> Dict:
+def _cp_sat_tsp(coords: np.ndarray, max_seconds: int = 120, blocked_mask: np.ndarray | None = None) -> Dict:
     try:
         from ortools.sat.python import cp_model
     except Exception as exc:
@@ -55,15 +57,22 @@ def _cp_sat_tsp(coords: np.ndarray, max_seconds: int = 120) -> Dict:
         for j in range(n):
             if i == j:
                 continue
+            if blocked_mask is not None and bool(blocked_mask[i, j]):
+                continue
             edge[(i, j)] = model.NewBoolVar(f"x_{i}_{j}")
 
     for i in range(n):
-        model.Add(sum(edge[(i, j)] for j in range(n) if j != i) == 1)
-        model.Add(sum(edge[(j, i)] for j in range(n) if j != i) == 1)
+        out_edges = [edge[(i, j)] for j in range(n) if j != i and (blocked_mask is None or not bool(blocked_mask[i, j]))]
+        in_edges = [edge[(j, i)] for j in range(n) if j != i and (blocked_mask is None or not bool(blocked_mask[j, i]))]
+        if not out_edges or not in_edges:
+            raise RuntimeError("Blocked edges make the exact TSP infeasible for this instance.")
+        model.Add(sum(out_edges) == 1)
+        model.Add(sum(in_edges) == 1)
 
-    arcs = [(i, j, edge[(i, j)]) for i in range(n) for j in range(n) if i != j]
+    arcs = [(i, j, edge[(i, j)]) for i in range(n) for j in range(n) if i != j and (blocked_mask is None or not bool(blocked_mask[i, j]))]
     model.AddCircuit(arcs)
-    model.Minimize(sum(scaled[i, j] * edge[(i, j)] for i in range(n) for j in range(n) if i != j))
+    # Minimize only over allowed edges present in the model (respect blocked_mask)
+    model.Minimize(sum(scaled[i, j] * edge[(i, j)] for i in range(n) for j in range(n) if i != j and (blocked_mask is None or not bool(blocked_mask[i, j]))))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(max_seconds)
@@ -74,11 +83,14 @@ def _cp_sat_tsp(coords: np.ndarray, max_seconds: int = 120) -> Dict:
         raise RuntimeError("Exact solver failed to find a tour in the configured time limit.")
 
     succ = {}
-    for i in range(n):
-        for j in range(n):
-            if i != j and solver.Value(edge[(i, j)]) == 1:
-                succ[i] = j
-                break
+    # Build successor mapping only over edges present in the model to avoid KeyError
+    for (i, j), var in edge.items():
+        try:
+            if solver.Value(var) == 1:
+                succ[int(i)] = int(j)
+        except Exception:
+            # ignore evaluation errors for safety; will check cycle validity later
+            continue
 
     tour = [0]
     seen = {0}
@@ -96,14 +108,14 @@ def _cp_sat_tsp(coords: np.ndarray, max_seconds: int = 120) -> Dict:
 
     return {
         "tour": tour,
-        "length": float(_tour_length(tour, coords)),
+        "length": float(_tour_length(tour, coords, blocked_mask=blocked_mask)),
         "is_optimal": status == cp_model.OPTIMAL,
         "method": "cp_sat",
         "status": "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
     }
 
 
-def solve_tsp_exact(coords: np.ndarray, max_seconds: int = 120) -> Dict:
+def solve_tsp_exact(coords: np.ndarray, max_seconds: int = 120, blocked_mask: np.ndarray | None = None) -> Dict:
     coords = np.asarray(coords)
     n = len(coords)
     if n < 3:
@@ -113,8 +125,8 @@ def solve_tsp_exact(coords: np.ndarray, max_seconds: int = 120) -> Dict:
 
     t0 = time.time()
     if n <= 11:
-        result = _bruteforce_tsp(coords)
+        result = _bruteforce_tsp(coords, blocked_mask=blocked_mask)
     else:
-        result = _cp_sat_tsp(coords, max_seconds=max_seconds)
+        result = _cp_sat_tsp(coords, max_seconds=max_seconds, blocked_mask=blocked_mask)
     result["solve_time_s"] = float(time.time() - t0)
     return result

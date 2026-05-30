@@ -5,15 +5,15 @@ from typing import Any, Callable
 
 import numpy as np
 
-from .aco import two_opt, tour_length, apply_edge_penalties
+from .aco import two_opt, tour_length
 from . import dynamic_env
 
 
-def _random_tour(rng: np.random.Generator, n: int) -> list[int]:
-    return rng.permutation(n).astype(int).tolist()
+def _random_tour(rng: np.random.Generator, n: int, blocked_mask=None) -> list[int] | None:
+    return dynamic_env.random_valid_tour(n, rng, blocked_mask)
 
 
-def _neighbor_tour(rng: np.random.Generator, tour: list[int]) -> list[int]:
+def _neighbor_tour(rng: np.random.Generator, tour: list[int], blocked_mask=None) -> list[int] | None:
     candidate = tour.copy()
     n = len(candidate)
     if n < 2:
@@ -22,14 +22,22 @@ def _neighbor_tour(rng: np.random.Generator, tour: list[int]) -> list[int]:
     if i == k:
         return candidate
     candidate[i : k + 1] = reversed(candidate[i : k + 1])
+    if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(candidate, blocked_mask):
+        return None
     return candidate
 
 
-def _evaluate_tour(coords: np.ndarray, tour: list[int], apply_two_opt: bool) -> tuple[list[int], float, int]:
+def _evaluate_tour(coords: np.ndarray, tour: list[int] | None, apply_two_opt: bool, blocked_mask=None) -> tuple[list[int] | None, float, int]:
+    if tour is None:
+        return None, float("inf"), 0
+    if blocked_mask is not None and dynamic_env.tour_has_blocked_edge(tour, blocked_mask):
+        tour = dynamic_env.random_valid_tour(len(coords), np.random.default_rng(), blocked_mask)
+        if tour is None:
+            return None, float("inf"), 0
     if apply_two_opt:
-        improved_tour, improved_len, eval_count = two_opt(tour, coords, return_eval_count=True)
+        improved_tour, improved_len, eval_count = two_opt(tour, coords, return_eval_count=True, blocked_mask=blocked_mask)
         return improved_tour, float(improved_len), int(eval_count)
-    return tour, float(tour_length(tour, coords)), 1
+    return tour, float(tour_length(tour, coords, blocked_mask=blocked_mask)), 1
 
 
 class ArtificialBeeColony:
@@ -98,16 +106,11 @@ class ArtificialBeeColony:
         source_lengths = []
         trials = np.zeros(self.n_food_sources, dtype=int)
 
-        # apply initial penalty matrix (noisy) if present
-        try:
-            pm = dynamic_env.get_penalty_matrix(self.n, iteration=0)
-            apply_edge_penalties(pm)
-        except Exception:
-            pass
+        blocked_mask = dynamic_env.get_block_mask(self.n, iteration=0)
 
         for _ in range(self.n_food_sources):
-            tour = _random_tour(self.rng, self.n)
-            tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt)
+            tour = _random_tour(self.rng, self.n, blocked_mask)
+            tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt, blocked_mask=blocked_mask)
             objective_evals_total += eval_count
             food_sources.append(tour)
             source_lengths.append(length)
@@ -118,6 +121,10 @@ class ArtificialBeeColony:
                 objective_evals_to_convergence = objective_evals_total
                 convergence_time_s = time.perf_counter() - t0
 
+        # If initial population contains no feasible solutions, fail fast with clear message
+        if all((not np.isfinite(float(l)) for l in source_lengths)):
+            raise RuntimeError("No feasible tours could be generated under the configured blocked edges. Adjust blocked edge settings or seed.")
+
         if best_tour is not None:
             convergence_iteration = 0
 
@@ -125,10 +132,13 @@ class ArtificialBeeColony:
             stopped_early = True
         else:
             for it in range(self.n_iterations):
-                # update penalty matrix per-iteration for dynamic mode
+                blocked_mask = dynamic_env.get_block_mask(self.n, iteration=it)
+                # In dynamic environments, if the current best tour becomes invalid, reset it so search can adapt
                 try:
-                    pm = dynamic_env.get_penalty_matrix(self.n, iteration=it)
-                    apply_edge_penalties(pm)
+                    if getattr(dynamic_env, "MODE", "standard") == "dynamic":
+                        if best_tour is not None and dynamic_env.tour_has_blocked_edge(best_tour, blocked_mask):
+                            best_tour = None
+                            best_len = float('inf')
                 except Exception:
                     pass
                 lengths_arr = np.asarray(source_lengths, dtype=float)
@@ -141,8 +151,8 @@ class ArtificialBeeColony:
 
                 # Employed bees.
                 for idx in range(self.n_food_sources):
-                    candidate = _neighbor_tour(self.rng, food_sources[idx])
-                    candidate, candidate_len, eval_count = _evaluate_tour(self.coords, candidate, self.apply_two_opt)
+                    candidate = _neighbor_tour(self.rng, food_sources[idx], blocked_mask=blocked_mask)
+                    candidate, candidate_len, eval_count = _evaluate_tour(self.coords, candidate, self.apply_two_opt, blocked_mask=blocked_mask)
                     objective_evals_total += eval_count
                     if candidate_len < source_lengths[idx]:
                         food_sources[idx] = candidate
@@ -154,8 +164,8 @@ class ArtificialBeeColony:
                 # Onlooker bees.
                 for _ in range(self.n_food_sources):
                     idx = self._select_source(probabilities)
-                    candidate = _neighbor_tour(self.rng, food_sources[idx])
-                    candidate, candidate_len, eval_count = _evaluate_tour(self.coords, candidate, self.apply_two_opt)
+                    candidate = _neighbor_tour(self.rng, food_sources[idx], blocked_mask=blocked_mask)
+                    candidate, candidate_len, eval_count = _evaluate_tour(self.coords, candidate, self.apply_two_opt, blocked_mask=blocked_mask)
                     objective_evals_total += eval_count
                     if candidate_len < source_lengths[idx]:
                         food_sources[idx] = candidate
@@ -168,8 +178,8 @@ class ArtificialBeeColony:
                 for idx in range(self.n_food_sources):
                     if trials[idx] < self.limit:
                         continue
-                    tour = _random_tour(self.rng, self.n)
-                    tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt)
+                    tour = _random_tour(self.rng, self.n, blocked_mask)
+                    tour, length, eval_count = _evaluate_tour(self.coords, tour, self.apply_two_opt, blocked_mask=blocked_mask)
                     objective_evals_total += eval_count
                     food_sources[idx] = tour
                     source_lengths[idx] = float(length)
@@ -187,9 +197,13 @@ class ArtificialBeeColony:
                 if best_len < prev_best and convergence_iteration is None:
                     convergence_iteration = it
 
+                # diagnostics: fraction of valid food sources
+                total = len(source_lengths)
+                valid = sum(1 for L in source_lengths if np.isfinite(L)) if total > 0 else 0
+                valid_fraction = float(valid) / float(max(1, total))
                 history.append(best_len)
                 if callback is not None:
-                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration)
+                    callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)
 
                 if reached_target(best_len):
                     stopped_early = True

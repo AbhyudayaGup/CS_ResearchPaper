@@ -7,6 +7,7 @@ import sys
 import inspect
 from html import escape
 import streamlit as st
+import plotly.graph_objects as go
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -358,6 +359,78 @@ def _render_metric_cards(summary_rows: list[dict]) -> None:
     st.caption(
         f"Most exact matches: {best_hits} ({top_hits['optimal_hits']} / {top_hits['runs']})."
     )
+
+
+def _render_bar_charts(summary_rows: list[dict]) -> None:
+    if not summary_rows:
+        return
+
+    summary_rows = sorted(summary_rows, key=lambda row: str(row.get("model", "")))
+
+    models = [row["model"] for row in summary_rows]
+    avg_gap = [float(row.get("avg_gap_pct", 0.0)) for row in summary_rows]
+    avg_time = [float(row.get("avg_convergence_time_s", 0.0)) for row in summary_rows]
+    avg_evals = [float(row.get("avg_evals_to_convergence", 0.0)) for row in summary_rows]
+    exact_match_rate = [float(row.get("exact_match_rate", 0.0)) * 100.0 for row in summary_rows]
+    avg_runtime = [float(row.get("avg_run_time_s", 0.0)) for row in summary_rows]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig_gap = go.Figure()
+        fig_gap.add_bar(x=models, y=avg_gap, marker_color="#f97316", name="Avg gap %")
+        fig_gap.update_layout(
+            title="Average Optimality Gap by Model",
+            xaxis_title="Model",
+            yaxis_title="Gap %",
+            height=360,
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_gap, use_container_width=True)
+
+        fig_time = go.Figure()
+        fig_time.add_bar(x=models, y=avg_time, marker_color="#38bdf8", name="Avg convergence time")
+        fig_time.update_layout(
+            title="Average Convergence Time by Model",
+            xaxis_title="Model",
+            yaxis_title="Seconds",
+            height=360,
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_time, use_container_width=True)
+
+    with col2:
+        fig_evals = go.Figure()
+        fig_evals.add_bar(x=models, y=avg_evals, marker_color="#a78bfa", name="Avg evals")
+        fig_evals.update_layout(
+            title="Average Evaluations to Convergence",
+            xaxis_title="Model",
+            yaxis_title="Evaluations",
+            height=360,
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_evals, use_container_width=True)
+
+        fig_rate = go.Figure()
+        fig_rate.add_bar(x=models, y=exact_match_rate, marker_color="#34d399", name="Exact match rate")
+        fig_rate.update_layout(
+            title="Exact Match Rate by Model",
+            xaxis_title="Model",
+            yaxis_title="Match rate (%)",
+            height=360,
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_rate, use_container_width=True)
+
+    fig_runtime = go.Figure()
+    fig_runtime.add_bar(x=models, y=avg_runtime, marker_color="#facc15", name="Avg runtime")
+    fig_runtime.update_layout(
+        title="Average End-to-End Runtime",
+        xaxis_title="Model",
+        yaxis_title="Seconds",
+        height=340,
+        template="plotly_dark",
+    )
+    st.plotly_chart(fig_runtime, use_container_width=True)
 
 
 def _render_table(rows: list[dict], selected_models: list[str]) -> None:
@@ -731,6 +804,9 @@ if run:
     st.markdown("### Batch summary")
     summary = build_model_summary(rows)
     _render_metric_cards(summary)
+    st.markdown("### Bar chart comparison")
+    st.caption("These charts are based on the standard TSP batch comparison results so you can compare models visually at a glance.")
+    _render_bar_charts(summary)
     _render_table(rows, [label for label in selected_models if available_models[label].runnable])
     st.markdown("### Model insights")
     _render_insights(rows)

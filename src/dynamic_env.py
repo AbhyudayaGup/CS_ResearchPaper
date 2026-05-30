@@ -11,6 +11,9 @@ PENALTY = 1e6
 SEED = None
 AUTO_RELAX = False
 LAST_RELAXED_UNBLOCKED = 0
+# Cache the first generated noisy mask for a given instance configuration so
+# noisy mode stays fixed instead of changing on every call.
+NOISY_MASK_CACHE: dict[tuple, np.ndarray] = {}
 
 
 def set_params(mode: str = "standard", blocked_fraction: float = 0.05, blocked_count: int | None = None, penalty: float = 1e6, seed: int | None = None, auto_relax: bool = False, **kwargs):
@@ -18,13 +21,15 @@ def set_params(mode: str = "standard", blocked_fraction: float = 0.05, blocked_c
 
     Accepts extra kwargs and ignores them to remain compatible with older UI calls.
     """
-    global MODE, BLOCKED_FRACTION, BLOCKED_COUNT, PENALTY, SEED, AUTO_RELAX
+    global MODE, BLOCKED_FRACTION, BLOCKED_COUNT, PENALTY, SEED, AUTO_RELAX, NOISY_MASK_CACHE, LAST_RELAXED_UNBLOCKED
     MODE = str(mode)
     BLOCKED_FRACTION = float(blocked_fraction)
     BLOCKED_COUNT = None if blocked_count is None else int(blocked_count)
     PENALTY = float(penalty)
     SEED = None if seed is None or int(seed) == 0 else int(seed)
     AUTO_RELAX = bool(auto_relax)
+    NOISY_MASK_CACHE = {}
+    LAST_RELAXED_UNBLOCKED = 0
 
 
 def clear_params():
@@ -58,6 +63,15 @@ def get_block_mask(n: int, iteration: int | None = None) -> Optional[np.ndarray]
     if MODE == "standard":
         return None
     rng_seed = SEED if SEED is not None else None
+    cache_key = (
+        int(n),
+        str(MODE),
+        None if BLOCKED_COUNT is None else int(BLOCKED_COUNT),
+        float(BLOCKED_FRACTION),
+        None if rng_seed is None else int(rng_seed),
+    )
+    if MODE == "noisy" and cache_key in NOISY_MASK_CACHE:
+        return NOISY_MASK_CACHE[cache_key].copy()
     if MODE == "dynamic" and iteration is not None:
         # vary with iteration to simulate changing inaccessible edges
         rng_seed = (SEED or 0) + int(iteration) * 7919
@@ -71,10 +85,14 @@ def get_block_mask(n: int, iteration: int | None = None) -> Optional[np.ndarray]
         if AUTO_RELAX:
             mask, relaxed, unblocked = ensure_feasible_mask(n, mask, auto_relax=True)
             LAST_RELAXED_UNBLOCKED = int(unblocked or 0)
+            if MODE == "noisy":
+                NOISY_MASK_CACHE[cache_key] = mask.copy()
             return mask
     except Exception:
         pass
     LAST_RELAXED_UNBLOCKED = 0
+    if MODE == "noisy":
+        NOISY_MASK_CACHE[cache_key] = mask.copy()
     return mask
 
 

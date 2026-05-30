@@ -138,9 +138,13 @@ class ParticleSwarm:
                 for i in range(self.n_particles):
                     r1 = self.rng.random(self.n)
                     r2 = self.rng.random(self.n)
+                    # guard against missing global best in dynamic mode
+                    social_term = 0.0
+                    if self.gbest_pos is not None:
+                        social_term = self.c2 * r2 * (self.gbest_pos - self.positions[i])
                     self.velocities[i] = (self.w * self.velocities[i] +
                                            self.c1 * r1 * (self.pbest_pos[i] - self.positions[i]) +
-                                           self.c2 * r2 * (self.gbest_pos - self.positions[i]))
+                                           social_term)
                     self.positions[i] = self.positions[i] + self.velocities[i]
                     # keep positions bounded
                     self.positions[i] = np.mod(self.positions[i], 1.0)

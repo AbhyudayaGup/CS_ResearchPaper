@@ -614,7 +614,11 @@ with right_col:
 
             run_start = time.perf_counter()
             try:
-                run_result = _run_optimizer_with_optional_stats(ac, cb, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+                run_result = _run_optimizer_with_optional_stats(
+                    ac,
+                    cb,
+                    target_length=(float(exact_result["length"]) if tsp_mode == "standard" and exact_result and exact_result.get("length") else None),
+                )
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
                 st.session_state["last_run"] = {"mode": tsp_mode, "model": "ACO", "error": str(exc)}
@@ -623,24 +627,24 @@ with right_col:
                 elapsed_s = time.perf_counter() - run_start
                 best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
                 if isinstance(run_result, tuple):
-                if len(run_result) == 3:
-                    best_tour, best_len, history = run_result
-                elif len(run_result) == 4:
-                    best_tour, best_len, history, convergence_iteration = run_result
-                elif len(run_result) >= 5:
-                    best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
-                if len(run_result) >= 6:
-                    stats = run_result[5]
+                    if len(run_result) == 3:
+                        best_tour, best_len, history = run_result
+                    elif len(run_result) == 4:
+                        best_tour, best_len, history, convergence_iteration = run_result
+                    elif len(run_result) >= 5:
+                        best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
+                    if len(run_result) >= 6:
+                        stats = run_result[5]
                 if stats is None:
                     stats = _fallback_stats(
-                    model="ACO",
-                    history=history,
-                    best_len=best_len,
-                    best_found_iter=best_found_iter,
-                    convergence_iteration=convergence_iteration,
-                    elapsed_s=elapsed_s,
-                    population_size=int(st.session_state["aco_num_ants"]),
-                )
+                        model="ACO",
+                        history=history,
+                        best_len=best_len,
+                        best_found_iter=best_found_iter,
+                        convergence_iteration=convergence_iteration,
+                        elapsed_s=elapsed_s,
+                        population_size=int(st.session_state["aco_num_ants"]),
+                    )
 
                 gap_text = ""
                 gap_value = None
@@ -650,11 +654,11 @@ with right_col:
                     gap_text = f" | Optimality gap: {gap:.3f}%"
                     gap_value = float(gap)
 
-            iter_text = ""
-            if best_found_iter is not None:
-                iter_text = f" | Best found at iteration: {best_found_iter}"
-            elif convergence_iteration is not None:
-                iter_text = f" | Converged at iteration: {convergence_iteration}"
+                iter_text = ""
+                if best_found_iter is not None:
+                    iter_text = f" | Best found at iteration: {best_found_iter}"
+                elif convergence_iteration is not None:
+                    iter_text = f" | Converged at iteration: {convergence_iteration}"
 
                 run_summary = {
                     "mode": tsp_mode,
@@ -742,7 +746,11 @@ with right_col:
 
             run_start = time.perf_counter()
             try:
-                run_result = _run_optimizer_with_optional_stats(abc, cb_abc, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+                run_result = _run_optimizer_with_optional_stats(
+                    abc,
+                    cb_abc,
+                    target_length=(float(exact_result["length"]) if tsp_mode == "standard" and exact_result and exact_result.get("length") else None),
+                )
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
                 st.session_state["last_run"] = {"mode": tsp_mode, "model": "ABC", "error": str(exc)}
@@ -751,24 +759,24 @@ with right_col:
                 elapsed_s = time.perf_counter() - run_start
                 best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
                 if isinstance(run_result, tuple):
-                if len(run_result) == 3:
-                    best_tour, best_len, history = run_result
-                elif len(run_result) == 4:
-                    best_tour, best_len, history, convergence_iteration = run_result
-                elif len(run_result) >= 5:
-                    best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
-                if len(run_result) >= 6:
-                    stats = run_result[5]
-            if stats is None:
-                stats = _fallback_stats(
-                    model="ABC",
-                    history=history,
-                    best_len=best_len,
-                    best_found_iter=best_found_iter,
-                    convergence_iteration=convergence_iteration,
-                    elapsed_s=elapsed_s,
-                    population_size=int(st.session_state.get("abc_num_food_sources", 20)),
-                )
+                    if len(run_result) == 3:
+                        best_tour, best_len, history = run_result
+                    elif len(run_result) == 4:
+                        best_tour, best_len, history, convergence_iteration = run_result
+                    elif len(run_result) >= 5:
+                        best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
+                    if len(run_result) >= 6:
+                        stats = run_result[5]
+                if stats is None:
+                    stats = _fallback_stats(
+                        model="ABC",
+                        history=history,
+                        best_len=best_len,
+                        best_found_iter=best_found_iter,
+                        convergence_iteration=convergence_iteration,
+                        elapsed_s=elapsed_s,
+                        population_size=int(st.session_state.get("abc_num_food_sources", 20)),
+                    )
 
                 gap_text = ""
                 gap_value = None
@@ -778,47 +786,47 @@ with right_col:
                     gap_text = f" | Optimality gap: {gap:.3f}%"
                     gap_value = float(gap)
 
-            iter_text = ""
-            if best_found_iter is not None:
-                iter_text = f" | Best found at iteration: {best_found_iter}"
-            elif convergence_iteration is not None:
-                iter_text = f" | Converged at iteration: {convergence_iteration}"
+                iter_text = ""
+                if best_found_iter is not None:
+                    iter_text = f" | Best found at iteration: {best_found_iter}"
+                elif convergence_iteration is not None:
+                    iter_text = f" | Converged at iteration: {convergence_iteration}"
 
-            run_summary = {
-                "mode": tsp_mode,
-                "model": "ABC",
-                "best_len": float(best_len),
-                "optimality_gap_pct": gap_value,
-                "best_found_iteration": int(stats["best_found_iteration"]),
-                "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
-                "convergence_time_s": float(stats["convergence_time_s"]),
-                "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                "objective_evals_total": int(stats["objective_evals_total"]),
-                "run_time_s": float(stats["run_time_s"]),
-                "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("abc_iterations", 200))),
-                "stopped_early": bool(stats.get("stopped_early", False)),
-                "iterations": int(st.session_state.get("abc_iterations", 200)),
-                "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
-            }
-            if tsp_mode == "dynamic":
-                dyn = _dynamic_metrics_from_history(
-                    history if isinstance(history, list) else [],
-                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
-                )
-                run_summary.update(
-                    {
-                        "best_len": None,
-                        "best_found_iteration": None,
-                        "convergence_iteration": None,
-                        "convergence_time_s": None,
-                        "optimality_gap_pct": None,
-                        "stopped_early": False,
-                        "objective_evals_to_convergence": None,
-                        "exact_match_rate": None,
-                        **dyn,
-                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
-                    }
-                )
+                run_summary = {
+                    "mode": tsp_mode,
+                    "model": "ABC",
+                    "best_len": float(best_len) if best_len is not None else None,
+                    "optimality_gap_pct": gap_value,
+                    "best_found_iteration": int(stats["best_found_iteration"]),
+                    "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
+                    "convergence_time_s": float(stats["convergence_time_s"]),
+                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
+                    "objective_evals_total": int(stats["objective_evals_total"]),
+                    "run_time_s": float(stats["run_time_s"]),
+                    "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("abc_iterations", 200))),
+                    "stopped_early": bool(stats.get("stopped_early", False)),
+                    "iterations": int(st.session_state.get("abc_iterations", 200)),
+                    "note": f"Best length {best_len:.3f}{iter_text}{gap_text}" if best_len is not None else "Run completed with no valid tour",
+                }
+                if tsp_mode == "dynamic":
+                    dyn = _dynamic_metrics_from_history(
+                        history if isinstance(history, list) else [],
+                        float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                    )
+                    run_summary.update(
+                        {
+                            "best_len": None,
+                            "best_found_iteration": None,
+                            "convergence_iteration": None,
+                            "convergence_time_s": None,
+                            "optimality_gap_pct": None,
+                            "stopped_early": False,
+                            "objective_evals_to_convergence": None,
+                            "exact_match_rate": None,
+                            **dyn,
+                            "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                        }
+                    )
                 st.session_state["last_run"] = run_summary
             # end if run_result is not None
 
@@ -873,7 +881,11 @@ with right_col:
 
             run_start = time.perf_counter()
             try:
-                run_result = _run_optimizer_with_optional_stats(ga, cb_ga, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+                run_result = _run_optimizer_with_optional_stats(
+                    ga,
+                    cb_ga,
+                    target_length=(float(exact_result["length"]) if tsp_mode == "standard" and exact_result and exact_result.get("length") else None),
+                )
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
                 st.session_state["last_run"] = {"mode": tsp_mode, "model": "GA", "error": str(exc)}
@@ -953,21 +965,6 @@ with right_col:
                     )
                 st.session_state["last_run"] = run_summary
             # end if run_result is not None
-                    {
-                        "best_len": None,
-                        "best_found_iteration": None,
-                        "convergence_iteration": None,
-                        "convergence_time_s": None,
-                        "optimality_gap_pct": None,
-                        "stopped_early": False,
-                        "objective_evals_to_convergence": None,
-                        "exact_match_rate": None,
-                        **dyn,
-                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
-                    }
-                )
-                st.session_state["last_run"] = run_summary
-            # end if run_result is not None
 
         elif algorithm == "Particle Swarm Optimization":
             pso_seed = None if int(st.session_state.get("pso_seed", 0)) == 0 else int(st.session_state.get("pso_seed", 0))
@@ -1019,83 +1016,87 @@ with right_col:
 
             run_start = time.perf_counter()
             try:
-                run_result = _run_optimizer_with_optional_stats(pso, cb_pso, target_length=float(exact_result["length"]) if exact_result and exact_result.get("length") else None)
+                run_result = _run_optimizer_with_optional_stats(
+                    pso,
+                    cb_pso,
+                    target_length=(float(exact_result["length"]) if tsp_mode == "standard" and exact_result and exact_result.get("length") else None),
+                )
             except Exception as exc:
                 st.error(f"Run failed: {exc}")
                 st.session_state["last_run"] = {"mode": tsp_mode, "model": "PSO", "error": str(exc)}
                 run_result = None
             if run_result is not None:
                 elapsed_s = time.perf_counter() - run_start
-            best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
-            if isinstance(run_result, tuple):
-                if len(run_result) == 3:
-                    best_tour, best_len, history = run_result
-                elif len(run_result) == 4:
-                    best_tour, best_len, history, convergence_iteration = run_result
-                elif len(run_result) >= 5:
-                    best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
-                if len(run_result) >= 6:
-                    stats = run_result[5]
-            if stats is None:
-                stats = _fallback_stats(
-                    model="PSO",
-                    history=history,
-                    best_len=best_len,
-                    best_found_iter=best_found_iter,
-                    convergence_iteration=convergence_iteration,
-                    elapsed_s=elapsed_s,
-                    population_size=int(st.session_state.get("pso_num_particles", 20)),
-                )
+                best_tour = best_len = history = convergence_iteration = best_found_iter = stats = None
+                if isinstance(run_result, tuple):
+                    if len(run_result) == 3:
+                        best_tour, best_len, history = run_result
+                    elif len(run_result) == 4:
+                        best_tour, best_len, history, convergence_iteration = run_result
+                    elif len(run_result) >= 5:
+                        best_tour, best_len, history, convergence_iteration, best_found_iter = run_result[:5]
+                    if len(run_result) >= 6:
+                        stats = run_result[5]
+                if stats is None:
+                    stats = _fallback_stats(
+                        model="PSO",
+                        history=history,
+                        best_len=best_len,
+                        best_found_iter=best_found_iter,
+                        convergence_iteration=convergence_iteration,
+                        elapsed_s=elapsed_s,
+                        population_size=int(st.session_state.get("pso_num_particles", 20)),
+                    )
 
-            gap_text = ""
-            gap_value = None
-            if exact_result and exact_result.get("length"):
-                opt_len = float(exact_result["length"])
-                gap = ((float(best_len) - opt_len) / opt_len) * 100.0
-                gap_text = f" | Optimality gap: {gap:.3f}%"
-                gap_value = float(gap)
+                gap_text = ""
+                gap_value = None
+                if exact_result and exact_result.get("length") and best_len is not None:
+                    opt_len = float(exact_result["length"])
+                    gap = ((float(best_len) - opt_len) / opt_len) * 100.0
+                    gap_text = f" | Optimality gap: {gap:.3f}%"
+                    gap_value = float(gap)
 
-            iter_text = ""
-            if best_found_iter is not None:
-                iter_text = f" | Best found at iteration: {best_found_iter}"
-            elif convergence_iteration is not None:
-                iter_text = f" | Converged at iteration: {convergence_iteration}"
+                iter_text = ""
+                if best_found_iter is not None:
+                    iter_text = f" | Best found at iteration: {best_found_iter}"
+                elif convergence_iteration is not None:
+                    iter_text = f" | Converged at iteration: {convergence_iteration}"
 
-            run_summary = {
-                "mode": tsp_mode,
-                "model": "PSO",
-                "best_len": float(best_len),
-                "optimality_gap_pct": gap_value,
-                "best_found_iteration": int(stats["best_found_iteration"]),
-                "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
-                "convergence_time_s": float(stats["convergence_time_s"]),
-                "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
-                "objective_evals_total": int(stats["objective_evals_total"]),
-                "run_time_s": float(stats["run_time_s"]),
-                "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("pso_iterations", 200))),
-                "stopped_early": bool(stats.get("stopped_early", False)),
-                "iterations": int(st.session_state.get("pso_iterations", 200)),
-                "note": f"Best length {best_len:.3f}{iter_text}{gap_text}",
-            }
-            if tsp_mode == "dynamic":
-                dyn = _dynamic_metrics_from_history(
-                    history if isinstance(history, list) else [],
-                    float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
-                )
-                run_summary.update(
-                    {
-                        "best_len": None,
-                        "best_found_iteration": None,
-                        "convergence_iteration": None,
-                        "convergence_time_s": None,
-                        "optimality_gap_pct": None,
-                        "stopped_early": False,
-                        "objective_evals_to_convergence": None,
-                        "exact_match_rate": None,
-                        **dyn,
-                        "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
-                    }
-                )
+                run_summary = {
+                    "mode": tsp_mode,
+                    "model": "PSO",
+                    "best_len": float(best_len) if best_len is not None else None,
+                    "optimality_gap_pct": gap_value,
+                    "best_found_iteration": int(stats["best_found_iteration"]),
+                    "convergence_iteration": int(convergence_iteration) if convergence_iteration is not None else None,
+                    "convergence_time_s": float(stats["convergence_time_s"]),
+                    "objective_evals_to_convergence": int(stats["objective_evals_to_convergence"]),
+                    "objective_evals_total": int(stats["objective_evals_total"]),
+                    "run_time_s": float(stats["run_time_s"]),
+                    "iterations_executed": int(stats.get("iterations_executed", st.session_state.get("pso_iterations", 200))),
+                    "stopped_early": bool(stats.get("stopped_early", False)),
+                    "iterations": int(st.session_state.get("pso_iterations", 200)),
+                    "note": f"Best length {best_len:.3f}{iter_text}{gap_text}" if best_len is not None else "Run completed with no valid tour",
+                }
+                if tsp_mode == "dynamic":
+                    dyn = _dynamic_metrics_from_history(
+                        history if isinstance(history, list) else [],
+                        float(exact_result["length"]) if exact_result and exact_result.get("length") else None,
+                    )
+                    run_summary.update(
+                        {
+                            "best_len": None,
+                            "best_found_iteration": None,
+                            "convergence_iteration": None,
+                            "convergence_time_s": None,
+                            "optimality_gap_pct": None,
+                            "stopped_early": False,
+                            "objective_evals_to_convergence": None,
+                            "exact_match_rate": None,
+                            **dyn,
+                            "note": "Dynamic TSP run complete: metrics are reported as iteration averages/variation.",
+                        }
+                    )
                 st.session_state["last_run"] = run_summary
             # end if run_result is not None
 

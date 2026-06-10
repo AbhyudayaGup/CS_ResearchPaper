@@ -9,9 +9,10 @@ Current UI behavior:
 - Right panel includes an algorithm dropdown with implemented `ACO`, `ABC`, `GA`, and `PSO`.
 - After each model run, the app shows comparison cards:
 	- `Convergence time (s)`
-	- `Evals to convergence`fo
+	- `Evals to convergence`
 	- `Total objective evals`
 - A separate `Model Comparison Dashboard` page is available from the Streamlit sidebar for batch benchmarking across many city sizes and configurations.
+- The dashboard now also supports a `Mega Report` flow: choose `standard`, `noisy`, or `dynamic`, generate a long-form benchmark with multiple seeds/instances, then open the new `Mega Report` page in the sidebar to review charts and download a PDF.
 - CSV logging has been removed; comparison results stay in-memory and render directly in the UI.
 
 Quick start:
@@ -31,6 +32,8 @@ streamlit run web/app.py
 ```
 
 From there, open `Model Comparison Dashboard` in the sidebar to run batch comparisons across selected models.
+
+To generate the long-form benchmark report, use the `Generate mega report` button on the dashboard, then open the `Mega Report` page in the sidebar.
 
 Important: run that command from the project root folder `C:\Users\abhyu\Documents\coding\CS_ResearchPaper`, not from inside `web/`.
 

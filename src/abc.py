@@ -197,10 +197,18 @@ class ArtificialBeeColony:
                 if best_len < prev_best and convergence_iteration is None:
                     convergence_iteration = it
 
-                # diagnostics: fraction of valid food sources
-                total = len(source_lengths)
-                valid = sum(1 for L in source_lengths if np.isfinite(L)) if total > 0 else 0
-                valid_fraction = float(valid) / float(max(1, total))
+                # diagnostics: fraction of valid food sources; hide in 'noisy' mode
+                try:
+                    if getattr(dynamic_env, "MODE", "standard") == "noisy":
+                        valid_fraction = None
+                    else:
+                        total = len(source_lengths)
+                        valid = sum(1 for L in source_lengths if np.isfinite(L)) if total > 0 else 0
+                        valid_fraction = float(valid) / float(max(1, total))
+                except Exception:
+                    total = len(source_lengths)
+                    valid = sum(1 for L in source_lengths if np.isfinite(L)) if total > 0 else 0
+                    valid_fraction = float(valid) / float(max(1, total))
                 history.append(best_len)
                 if callback is not None:
                     callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)

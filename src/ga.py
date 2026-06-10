@@ -224,10 +224,18 @@ class GeneticAlgorithm:
                     convergence_iteration = it
 
                 history.append(best_len)
-                # diagnostics: fraction of valid individuals
-                total = len(population)
-                valid = sum(1 for s in scores if np.isfinite(float(s))) if total > 0 else 0
-                valid_fraction = float(valid) / float(max(1, total))
+                # diagnostics: fraction of valid individuals; hide in 'noisy' mode
+                try:
+                    if getattr(dynamic_env, "MODE", "standard") == "noisy":
+                        valid_fraction = None
+                    else:
+                        total = len(population)
+                        valid = sum(1 for s in scores if np.isfinite(float(s))) if total > 0 else 0
+                        valid_fraction = float(valid) / float(max(1, total))
+                except Exception:
+                    total = len(population)
+                    valid = sum(1 for s in scores if np.isfinite(float(s))) if total > 0 else 0
+                    valid_fraction = float(valid) / float(max(1, total))
                 if callback is not None:
                     callback(iteration=it, best_len=best_len, best_tour=best_tour, convergence_iteration=convergence_iteration, valid_fraction=valid_fraction)
 

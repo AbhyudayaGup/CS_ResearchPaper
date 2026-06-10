@@ -198,10 +198,18 @@ class AntColony:
                 pass
             tours, lengths, eval_count = self._construct_solutions(blocked_mask=blocked_mask)
             objective_evals_total += eval_count
-            # compute valid fraction for diagnostics
-            valid_total = len(lengths) if lengths else 0
-            valid_count = sum(1 for L in lengths if np.isfinite(L)) if valid_total > 0 else 0
-            valid_fraction = float(valid_count) / float(max(1, valid_total))
+            # compute valid fraction for diagnostics; hide this metric in 'noisy' mode
+            try:
+                if getattr(dynamic_env, "MODE", "standard") == "noisy":
+                    valid_fraction = None
+                else:
+                    valid_total = len(lengths) if lengths else 0
+                    valid_count = sum(1 for L in lengths if np.isfinite(L)) if valid_total > 0 else 0
+                    valid_fraction = float(valid_count) / float(max(1, valid_total))
+            except Exception:
+                valid_total = len(lengths) if lengths else 0
+                valid_count = sum(1 for L in lengths if np.isfinite(L)) if valid_total > 0 else 0
+                valid_fraction = float(valid_count) / float(max(1, valid_total))
             # optional local search
             if self.apply_two_opt:
                 pre_tours, pre_lengths = tours, lengths

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import threading
 import time
@@ -20,6 +21,7 @@ from src.comparison import (
     parse_int_list,
     run_comparison_batch,
 )
+from src.mega_report import latest_report_path, run_mega_report
 
 
 st.set_page_config(page_title="Model Comparison Dashboard", layout="wide")
@@ -527,6 +529,23 @@ def _call_run_comparison_batch(**kwargs):
     return run_comparison_batch(**filtered)
 
 
+def _call_run_mega_report(**kwargs):
+    signature = inspect.signature(run_mega_report)
+    filtered = {name: value for name, value in kwargs.items() if name in signature.parameters}
+    return run_mega_report(**filtered)
+
+
+def _format_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "calculating"
+    seconds = max(0.0, float(seconds))
+    minutes = int(seconds // 60)
+    remaining = seconds % 60
+    if minutes <= 0:
+        return f"{remaining:.0f}s"
+    return f"{minutes}m {remaining:.0f}s"
+
+
 _inject_css()
 
 st.markdown(
@@ -600,6 +619,36 @@ with right:
         state = "ready" if spec.runnable else "coming soon"
         st.write(f"- {spec.label}: {state} - {spec.description}")
 
+    st.markdown("### Mega report")
+    mega_tsp_mode = st.selectbox(
+        "Mega report TSP variant",
+        ["standard", "noisy", "dynamic"],
+        index=0,
+        help="Choose which TSP variant the long report should benchmark.",
+    )
+    mega_instances_per_size = st.number_input(
+        "Instances per city size",
+        min_value=1,
+        max_value=12,
+        value=3,
+        step=1,
+        help="Each city size is generated multiple times with different seeds.",
+    )
+    mega_parallel_workers = st.number_input(
+        "Parallel workers",
+        min_value=1,
+        max_value=max(1, os.cpu_count() or 4),
+        value=min(4, max(1, os.cpu_count() or 4)),
+        step=1,
+        help="Uses separate worker processes so all four algorithms can run in parallel safely.",
+    )
+    mega_use_selected_models = st.checkbox(
+        "Limit report to selected models",
+        value=False,
+        help="Turn this on if you want the report to use only the models currently checked in the batch panel.",
+    )
+    mega_run = st.button("Generate mega report", type="secondary", use_container_width=True)
+
     st.markdown("### Effective run matrix")
     city_sizes = parse_int_list(city_sizes_raw, fallback=[10, 20, 30, 40])
     aco_configs = parse_int_list(aco_configs_raw, fallback=[10, 20, 40])
@@ -651,10 +700,128 @@ with right:
         unsafe_allow_html=True,
     )
 
+    report_models = selected_runnable if mega_use_selected_models else [spec.label for spec in AVAILABLE_ALGORITHMS if spec.runnable]
+    report_task_count = len(city_sizes) * max(1, int(mega_instances_per_size)) * sum(
+        len(values)
+        for label, values in (("ACO", aco_configs), ("ABC", abc_configs), ("GA", ga_configs), ("PSO", pso_configs))
+        if label in report_models
+    )
+    st.caption(
+        f"Mega report scope: {mega_tsp_mode} TSP · {mega_instances_per_size} instances per city size · about {report_task_count} algorithm runs before parallelism."
+    )
+
 if selected_unavailable:
     st.warning(
         "Some selected models are not implemented yet: " + ", ".join(selected_unavailable) + ". They will appear in the report as unavailable until runners are added."
     )
+
+if mega_run:
+    if not city_sizes:
+        st.error("Provide at least one city size before generating the mega report.")
+        st.stop()
+
+    report_models = selected_runnable if mega_use_selected_models else [spec.label for spec in AVAILABLE_ALGORITHMS if spec.runnable]
+    report_model_config_values = {
+        "ACO": aco_configs,
+        "ABC": abc_configs,
+        "GA": ga_configs,
+        "PSO": pso_configs,
+    }
+
+    mega_progress_area = st.container()
+    mega_status = mega_progress_area.empty()
+    mega_bar = mega_progress_area.empty()
+    mega_eta = mega_progress_area.empty()
+    mega_detail = mega_progress_area.empty()
+
+    mega_state = {
+        "event": {
+            "type": "idle",
+            "progress": 0.0,
+            "completed_work": 0,
+            "total_work": 1,
+            "eta_s": None,
+        },
+        "report": None,
+        "error": None,
+    }
+    mega_lock = threading.Lock()
+
+    def update_mega_progress(event: dict) -> None:
+        with mega_lock:
+            mega_state["event"] = dict(event)
+
+    def _run_mega_worker() -> None:
+        try:
+            report = _call_run_mega_report(
+                tsp_mode=str(mega_tsp_mode),
+                city_sizes=city_sizes,
+                instances_per_size=int(mega_instances_per_size),
+                base_seed=None if int(base_seed) == 0 else int(base_seed),
+                clustered=clustered,
+                iterations=int(iterations),
+                exact_timeout=int(exact_timeout),
+                selected_models=report_models,
+                model_config_values=report_model_config_values,
+                aco_settings=aco_settings,
+                pso_settings=pso_settings,
+                abc_settings=abc_settings,
+                ga_settings=ga_settings,
+                blocked_fraction=float(tsp_blocked_fraction),
+                blocked_count=None if int(tsp_blocked_count) == 0 else int(tsp_blocked_count),
+                penalty=float(tsp_penalty),
+                auto_relax=bool(auto_relax_blocks),
+                target_gap_pct=float(target_gap_pct),
+                parallel_workers=int(mega_parallel_workers),
+                progress_callback=update_mega_progress,
+            )
+            with mega_lock:
+                mega_state["report"] = report
+        except Exception as exc:
+            with mega_lock:
+                mega_state["error"] = exc
+
+    mega_worker = threading.Thread(target=_run_mega_worker, daemon=True)
+    mega_worker.start()
+
+    while mega_worker.is_alive():
+        with mega_lock:
+            event = dict(mega_state["event"])
+
+        progress_pct = float(event.get("progress", 0.0))
+        completed_work = int(event.get("completed_work", 0))
+        total_work = max(1, int(event.get("total_work", 1)))
+        eta_text = _format_seconds(event.get("eta_s"))
+        event_type = str(event.get("type", "running"))
+        if event_type == "prep_started":
+            headline = "Preparing mega report"
+            detail = f"Building scenarios for the {mega_tsp_mode} TSP variant."
+        elif event_type == "scenario_prepared":
+            headline = f"Scenario {event.get('scenario_index')} / {event.get('scenario_total')} prepared"
+            detail = f"City count {event.get('city_count')} · scenario {event.get('scenario_id')}"
+        elif event_type == "task_completed":
+            headline = f"{event.get('model', 'Model')} completed"
+            detail = f"Scenario {event.get('scenario_id')} · {completed_work}/{total_work} work items finished"
+        else:
+            headline = "Mega report running"
+            detail = f"{completed_work}/{total_work} work items finished"
+
+        mega_status.markdown(f"**Mega report progress:** {completed_work}/{total_work} steps complete")
+        mega_bar.progress(int(round(max(0.0, min(1.0, progress_pct)) * 100.0)))
+        mega_eta.markdown(f"**ETA:** {eta_text}")
+        mega_detail.markdown(f"**Current step:** {headline} · {detail}")
+        time.sleep(0.12)
+
+    mega_worker.join()
+    with mega_lock:
+        if mega_state["error"] is not None:
+            raise mega_state["error"]
+        mega_report = mega_state["report"]
+
+    st.session_state["mega_report_path"] = mega_report["files"]["json"]
+    st.session_state["mega_report_pdf"] = mega_report["files"]["pdf"]
+    st.session_state["mega_report_data"] = mega_report
+    st.success(f"Mega report finished in {_format_seconds(float(mega_report.get('elapsed_s', 0.0)))}. Open the Mega Report page in the sidebar to review it or download the PDF.")
 
 if run:
     if not selected_models:

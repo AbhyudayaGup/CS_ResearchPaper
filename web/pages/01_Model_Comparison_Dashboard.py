@@ -634,6 +634,12 @@ with right:
         step=1,
         help="Each city size is generated multiple times with different seeds.",
     )
+    mega_city_gap_detail_mode = st.selectbox(
+        "Gap by city size detail",
+        ["summary", "detailed 30-40 sweep"],
+        index=0,
+        help="Use the detailed sweep only for the gap-by-city-size chart. The rest of the report stays unchanged.",
+    )
     mega_parallel_workers = st.number_input(
         "Parallel workers",
         min_value=1,
@@ -706,9 +712,53 @@ with right:
         for label, values in (("ACO", aco_configs), ("ABC", abc_configs), ("GA", ga_configs), ("PSO", pso_configs))
         if label in report_models
     )
+    if mega_city_gap_detail_mode != "summary":
+        report_task_count += 11 * max(1, int(mega_instances_per_size)) * sum(
+            len(values)
+            for label, values in (("ACO", aco_configs), ("ABC", abc_configs), ("GA", ga_configs), ("PSO", pso_configs))
+            if label in report_models
+        )
     st.caption(
         f"Mega report scope: {mega_tsp_mode} TSP · {mega_instances_per_size} instances per city size · about {report_task_count} algorithm runs before parallelism."
     )
+    if mega_city_gap_detail_mode != "summary":
+        st.caption("Gap-by-city-size detail is enabled for 30-40 inclusive.")
+
+    # Build settings objects used by both the batch runner and the mega-report flow.
+    # These are defined here so the mega-report path (which runs independently
+    # of the regular "Run comparison batch" button) has access to the same
+    # tuning parameters as the batch flow.
+    aco_settings = {
+        "two_opt": aco_two_opt,
+        "alpha": aco_alpha,
+        "beta": aco_beta,
+        "rho": aco_rho,
+        "Q": aco_q,
+    }
+    abc_settings = {
+        "two_opt": abc_two_opt,
+        "limit": abc_limit,
+    }
+    ga_settings = {
+        "two_opt": ga_two_opt,
+        "crossover_rate": ga_crossover_rate,
+        "mutation_rate": ga_mutation_rate,
+        "elite_fraction": ga_elite_fraction,
+        "tournament_size": ga_tournament_size,
+    }
+    pso_settings = {
+        "two_opt": pso_two_opt,
+        "w": pso_w,
+        "c1": pso_c1,
+        "c2": pso_c2,
+    }
+
+    # TSP blocked-edge defaults (dashboard doesn't yet expose these controls;
+    # use safe defaults so mega-report can run without additional UI elements).
+    tsp_blocked_fraction = 0.0
+    tsp_blocked_count = 0
+    tsp_penalty = 1.0
+    auto_relax_blocks = False
 
 if selected_unavailable:
     st.warning(
@@ -773,6 +823,7 @@ if mega_run:
                 auto_relax=bool(auto_relax_blocks),
                 target_gap_pct=float(target_gap_pct),
                 parallel_workers=int(mega_parallel_workers),
+                city_gap_detail_mode=str(mega_city_gap_detail_mode),
                 progress_callback=update_mega_progress,
             )
             with mega_lock:

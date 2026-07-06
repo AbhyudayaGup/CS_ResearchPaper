@@ -214,6 +214,46 @@ def _tasks_for_scenario(
     return tasks
 
 
+def _task_batch_for_scenarios(
+    scenarios: Iterable[MegaReportScenario],
+    *,
+    selected_models: Iterable[str],
+    model_config_values: dict[str, Iterable[int]],
+    iterations: int,
+    target_gap_pct: float,
+    aco_settings: dict[str, Any],
+    pso_settings: dict[str, Any],
+    abc_settings: dict[str, Any],
+    ga_settings: dict[str, Any],
+    tsp_mode: str,
+    blocked_fraction: float,
+    blocked_count: int | None,
+    penalty: float,
+    auto_relax: bool,
+) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        tasks.extend(
+            _tasks_for_scenario(
+                scenario,
+                selected_models=selected_models,
+                model_config_values=model_config_values,
+                iterations=iterations,
+                target_gap_pct=target_gap_pct,
+                aco_settings=aco_settings,
+                pso_settings=pso_settings,
+                abc_settings=abc_settings,
+                ga_settings=ga_settings,
+                tsp_mode=tsp_mode,
+                blocked_fraction=blocked_fraction,
+                blocked_count=blocked_count,
+                penalty=penalty,
+                auto_relax=auto_relax,
+            )
+        )
+    return tasks
+
+
 def _row_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
@@ -318,7 +358,8 @@ def _build_insights(report: dict[str, Any]) -> list[str]:
 
 def _make_pdf(report: dict[str, Any], pdf_path: Path) -> None:
     summary = pd.DataFrame(report.get("summary", []))
-    city_summary = _city_summary(report.get("rows", []))
+    city_gap_rows = report.get("city_gap_rows") or report.get("rows", [])
+    city_summary = _city_summary(city_gap_rows)
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(pdf_path) as pdf:
         fig = plt.figure(figsize=(11, 8.5))
@@ -391,6 +432,7 @@ def run_mega_report(
     auto_relax: bool = False,
     target_gap_pct: float = 0.0,
     parallel_workers: int = 4,
+    city_gap_detail_mode: str = "summary",
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     report_id = _make_report_id()
@@ -399,6 +441,8 @@ def run_mega_report(
 
     selected_models = [str(model) for model in selected_models] or [spec.label for spec in AVAILABLE_ALGORITHMS if spec.runnable]
     city_sizes = [int(value) for value in city_sizes]
+    detail_mode = str(city_gap_detail_mode).strip().lower()
+    detailed_city_gap = detail_mode in {"detailed", "detail", "full", "dense", "all"}
     scenarios = _build_scenarios(
         city_sizes,
         instances_per_size=int(instances_per_size),
@@ -411,29 +455,55 @@ def run_mega_report(
         penalty=float(penalty),
         auto_relax=bool(auto_relax),
     )
-    tasks: list[dict[str, Any]] = []
-    for scenario in scenarios:
-        tasks.extend(
-            _tasks_for_scenario(
-                scenario,
-                selected_models=selected_models,
-                model_config_values=model_config_values,
-                iterations=iterations,
-                target_gap_pct=target_gap_pct,
-                aco_settings=aco_settings,
-                pso_settings=pso_settings,
-                abc_settings=abc_settings,
-                ga_settings=ga_settings,
-                tsp_mode=tsp_mode,
-                blocked_fraction=blocked_fraction,
-                blocked_count=blocked_count,
-                penalty=penalty,
-                auto_relax=auto_relax,
-            )
-        )
+    detailed_city_sizes = list(range(30, 41)) if detailed_city_gap else []
+    detailed_scenarios = _build_scenarios(
+        detailed_city_sizes,
+        instances_per_size=int(instances_per_size),
+        base_seed=base_seed,
+        clustered=clustered,
+        tsp_mode=tsp_mode,
+        exact_timeout=int(exact_timeout),
+        blocked_fraction=float(blocked_fraction),
+        blocked_count=blocked_count,
+        penalty=float(penalty),
+        auto_relax=bool(auto_relax),
+    ) if detailed_city_gap else []
+    tasks = _task_batch_for_scenarios(
+        scenarios,
+        selected_models=selected_models,
+        model_config_values=model_config_values,
+        iterations=iterations,
+        target_gap_pct=target_gap_pct,
+        aco_settings=aco_settings,
+        pso_settings=pso_settings,
+        abc_settings=abc_settings,
+        ga_settings=ga_settings,
+        tsp_mode=tsp_mode,
+        blocked_fraction=blocked_fraction,
+        blocked_count=blocked_count,
+        penalty=penalty,
+        auto_relax=auto_relax,
+    )
+    detailed_tasks = _task_batch_for_scenarios(
+        detailed_scenarios,
+        selected_models=selected_models,
+        model_config_values=model_config_values,
+        iterations=iterations,
+        target_gap_pct=target_gap_pct,
+        aco_settings=aco_settings,
+        pso_settings=pso_settings,
+        abc_settings=abc_settings,
+        ga_settings=ga_settings,
+        tsp_mode=tsp_mode,
+        blocked_fraction=blocked_fraction,
+        blocked_count=blocked_count,
+        penalty=penalty,
+        auto_relax=auto_relax,
+    ) if detailed_city_gap else []
 
     rows: list[dict[str, Any]] = []
-    total_work = max(1, len(scenarios) + len(tasks))
+    city_gap_rows: list[dict[str, Any]] = []
+    total_work = max(1, len(scenarios) + len(tasks) + len(detailed_scenarios) + len(detailed_tasks))
     completed = 0
     started = time.perf_counter()
 
@@ -468,6 +538,20 @@ def run_mega_report(
             }
         )
 
+    if detailed_city_gap:
+        emit({"type": "gap_prep_started", "scenario_count": len(detailed_scenarios), "task_count": len(detailed_tasks), "city_gap_detail_mode": detail_mode})
+        for index, scenario in enumerate(detailed_scenarios, start=1):
+            completed += 1
+            emit(
+                {
+                    "type": "gap_scenario_prepared",
+                    "scenario_index": index,
+                    "scenario_total": len(detailed_scenarios),
+                    "scenario_id": scenario.scenario_id,
+                    "city_count": scenario.city_count,
+                }
+            )
+
     if parallel_workers <= 1 or len(tasks) <= 1:
         for index, task in enumerate(tasks, start=1):
             rows.append(_task_worker(task))
@@ -482,6 +566,21 @@ def run_mega_report(
                 completed += 1
                 emit({"type": "task_completed", "task_index": index, "task_total": len(tasks), "model": task["model_label"], "scenario_id": task["scenario_id"]})
 
+    if detailed_city_gap:
+        if parallel_workers <= 1 or len(detailed_tasks) <= 1:
+            for index, task in enumerate(detailed_tasks, start=1):
+                city_gap_rows.append(_task_worker(task))
+                completed += 1
+                emit({"type": "gap_task_completed", "task_index": index, "task_total": len(detailed_tasks), "model": task["model_label"], "scenario_id": task["scenario_id"]})
+        else:
+            with ProcessPoolExecutor(max_workers=int(parallel_workers)) as executor:
+                future_map = {executor.submit(_task_worker, task): task for task in detailed_tasks}
+                for index, future in enumerate(as_completed(future_map), start=1):
+                    task = future_map[future]
+                    city_gap_rows.append(future.result())
+                    completed += 1
+                    emit({"type": "gap_task_completed", "task_index": index, "task_total": len(detailed_tasks), "model": task["model_label"], "scenario_id": task["scenario_id"]})
+
     report = {
         "report_id": report_id,
         "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
@@ -489,6 +588,8 @@ def run_mega_report(
         "settings": {
             "tsp_mode": tsp_mode,
             "city_sizes": city_sizes,
+            "city_gap_detail_mode": detail_mode,
+            "city_gap_detail_sizes": detailed_city_sizes,
             "instances_per_size": int(instances_per_size),
             "base_seed": base_seed,
             "clustered": bool(clustered),
@@ -520,6 +621,7 @@ def run_mega_report(
             for scenario in scenarios
         ],
         "rows": rows,
+        "city_gap_rows": city_gap_rows,
     }
     report["summary"] = build_mega_summary(rows)
     report["scenario_summary"] = _scenario_summary(rows)
@@ -557,5 +659,7 @@ def report_rows_frame(report: dict[str, Any]) -> pd.DataFrame:
     return _row_df(report.get("rows", []))
 
 
-def city_summary_frame(report: dict[str, Any]) -> pd.DataFrame:
+def city_summary_frame(report: dict[str, Any], *, use_detailed: bool = False) -> pd.DataFrame:
+    if use_detailed and report.get("city_gap_rows"):
+        return _city_summary(report.get("city_gap_rows", []))
     return _city_summary(report.get("rows", []))

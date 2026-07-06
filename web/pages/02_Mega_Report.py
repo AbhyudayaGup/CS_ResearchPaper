@@ -241,7 +241,16 @@ if json_path.exists():
     )
 
 st.markdown("### Charts")
-_render_summary_charts(summary, city_summary)
+gap_view_mode = st.selectbox(
+    "Gap by city size view",
+    ["summary city sizes", "detailed 30-40 sweep"],
+    index=0,
+    help="Switch only the gap-by-city-size chart between the default report data and the detailed sweep, if it was generated.",
+)
+city_summary_view = city_summary_frame(report, use_detailed=gap_view_mode.startswith("detailed"))
+if gap_view_mode.startswith("detailed") and city_summary_view.equals(city_summary):
+    st.info("This report does not include a detailed 30-40 sweep, so the chart is using the summary city sizes.")
+_render_summary_charts(summary, city_summary_view)
 
 st.markdown("### Insights")
 if report.get("insights"):

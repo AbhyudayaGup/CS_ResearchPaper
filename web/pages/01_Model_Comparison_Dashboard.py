@@ -626,6 +626,34 @@ with right:
         index=0,
         help="Choose which TSP variant the long report should benchmark.",
     )
+    tsp_blocked_fraction = st.number_input(
+        "Blocked edge fraction",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.05,
+        step=0.01,
+        format="%.2f",
+        help="Fraction of undirected edges to block when blocked edge count is 0.",
+    )
+    tsp_blocked_count = st.number_input(
+        "Blocked edge count",
+        min_value=0,
+        value=0,
+        step=1,
+        help="Exact number of undirected edges to block. Set to 0 to use the fraction above.",
+    )
+    tsp_penalty = st.number_input(
+        "Blocked edge penalty",
+        min_value=0.0,
+        value=1_000_000.0,
+        step=100_000.0,
+        help="Objective penalty applied to routes that use blocked edges.",
+    )
+    auto_relax_blocks = st.checkbox(
+        "Auto-relax infeasible blocked masks",
+        value=False,
+        help="Unblock edges automatically if the blocked mask cannot support a tour.",
+    )
     mega_instances_per_size = st.number_input(
         "Instances per city size",
         min_value=1,
@@ -752,13 +780,6 @@ with right:
         "c1": pso_c1,
         "c2": pso_c2,
     }
-
-    # TSP blocked-edge defaults (dashboard doesn't yet expose these controls;
-    # use safe defaults so mega-report can run without additional UI elements).
-    tsp_blocked_fraction = 0.0
-    tsp_blocked_count = 0
-    tsp_penalty = 1.0
-    auto_relax_blocks = False
 
 if selected_unavailable:
     st.warning(

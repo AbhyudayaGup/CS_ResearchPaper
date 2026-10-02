@@ -1,4 +1,4 @@
-# Traveling Sailsman (TSP) — ACO demo
+# Traveling Sailsman (TSP)
 
 This project provides a simple educational implementation of Ant Colony Optimization (ACO) for the Traveling Salesman Problem (TSP), with a Streamlit-based interactive visualization.
 

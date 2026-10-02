@@ -12,8 +12,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.mega_report import (  # noqa: E402
+    available_report_paths,
     city_summary_frame,
-    latest_report_path,
     load_report_json,
     report_rows_frame,
     report_summary_frame,
@@ -180,6 +180,15 @@ def _render_summary_charts(summary: list[dict], city_summary) -> None:
         st.plotly_chart(fig_city_gap, use_container_width=True)
 
 
+def _report_label(report_path: Path) -> str:
+    report = load_report_json(report_path)
+    report_id = str(report.get("report_id") or report_path.parent.name)
+    variant = str(report.get("variant", "standard")).title()
+    created_at = str(report.get("created_at", ""))
+    created_label = created_at.replace("T", " ").replace("Z", "")[:19]
+    return f"{created_label} · {variant} · {report_id}"
+
+
 _inject_css()
 
 st.markdown(
@@ -196,12 +205,29 @@ st.markdown(
 )
 
 session_report_path = st.session_state.get("mega_report_path")
-report_path = Path(session_report_path) if session_report_path else latest_report_path()
-if not report_path:
+report_paths = available_report_paths()
+if session_report_path:
+    session_path = Path(session_report_path)
+    if session_path.exists() and session_path not in report_paths:
+        report_paths.insert(0, session_path)
+if not report_paths:
     st.warning("No mega report has been generated yet.")
     st.info("Go to the Model Comparison Dashboard, generate a mega report, and return here to review it.")
     st.stop()
 
+default_report_index = 0
+if session_report_path:
+    session_path = Path(session_report_path)
+    if session_path in report_paths:
+        default_report_index = report_paths.index(session_path)
+selected_report_path = st.selectbox(
+    "Mega report to display",
+    options=report_paths,
+    index=default_report_index,
+    format_func=_report_label,
+    help="Choose which saved mega report powers the summary, charts, tables, and downloads below.",
+)
+report_path = Path(selected_report_path)
 report = load_report_json(report_path)
 summary = report_summary_frame(report).to_dict(orient="records")
 city_summary = city_summary_frame(report)

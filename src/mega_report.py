@@ -645,10 +645,14 @@ def load_report_json(report_path: str | Path) -> dict[str, Any]:
 
 
 def latest_report_path() -> Path | None:
-    if not REPORT_ROOT.exists():
-        return None
-    candidates = sorted(REPORT_ROOT.glob("*/report.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    candidates = available_report_paths()
     return candidates[0] if candidates else None
+
+
+def available_report_paths() -> list[Path]:
+    if not REPORT_ROOT.exists():
+        return []
+    return sorted(REPORT_ROOT.glob("*/report.json"), key=lambda path: path.stat().st_mtime, reverse=True)
 
 
 def report_summary_frame(report: dict[str, Any]) -> pd.DataFrame:
